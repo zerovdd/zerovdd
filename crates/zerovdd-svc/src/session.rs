@@ -193,7 +193,7 @@ impl GpuEnumerator for DefaultGpuEnumerator {
         #[cfg(not(windows))]
         {
             Err(ClientError::GpuNotFound {
-                selector: "DXGI enumeration is only supported on Windows".to_string(),
+                query: "DXGI enumeration is only supported on Windows".to_string(),
             })
         }
     }

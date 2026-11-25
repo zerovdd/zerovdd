@@ -47,6 +47,7 @@ runs:
           if ($LASTEXITCODE -ge 8) {
             throw "robocopy failed copying $Src -> $Dst (exit code $LASTEXITCODE)"
           }
+          $global:LASTEXITCODE = 0
         }
 
         function Fetch-NuGet {

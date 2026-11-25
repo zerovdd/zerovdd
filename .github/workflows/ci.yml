@@ -35,8 +35,9 @@ jobs:
           cache-key: "linux-fast"
 
       - name: Install cargo-machete
-        shell: bash
-        run: cargo install --locked cargo-machete
+        uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
+        with:
+          tool: cargo-machete
 
       - name: Run standalone repo lints (fmt, clippy, static lints, script tests, em-dash, drift)
         shell: bash
@@ -73,6 +74,15 @@ jobs:
           toolchain: "1.100.0"
           targets: ${{ matrix.target }}
           cache-key: "win-${{ matrix.arch }}"
+          workspaces: |
+            .
+            driver-wdk
+
+      - name: Install cargo-machete (x64)
+        if: matrix.arch == 'x64'
+        uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
+        with:
+          tool: cargo-machete
 
       - name: Check user-mode workspace for ${{ matrix.target }}
         shell: pwsh
@@ -84,7 +94,6 @@ jobs:
         run: |
           cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
           cargo test --workspace --quiet
-          cargo install --locked cargo-machete
           cargo machete
 
       - name: Setup Windows 11 WDK (${{ matrix.arch }})

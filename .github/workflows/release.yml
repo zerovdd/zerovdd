@@ -77,6 +77,14 @@ jobs:
           toolchain: "1.100.0"
           targets: ${{ matrix.target }}
           cache-key: "release-${{ matrix.arch }}"
+          workspaces: |
+            .
+            driver-wdk
+
+      - name: Install cargo-cyclonedx
+        uses: taiki-e/install-action@893d6ee8d714b6c7dfe2bcd94e5759e9a7958a7e # v2.90.10
+        with:
+          tool: cargo-cyclonedx
 
       - name: Install WiX v5 CLI
         shell: pwsh
@@ -467,11 +475,6 @@ jobs:
           Copy-Item "dist/$env:BUILD_ARCH/*" $zipDriverDir -Force
           $zipPath = "release-out/zerovdd-$env:PKG_VERSION-$env:BUILD_ARCH.zip"
           Compress-Archive -Path "$zipStageDir/*" -DestinationPath $zipPath -Force
-
-          cargo install --locked cargo-cyclonedx --version 0.5.10
-          if ($LASTEXITCODE -ne 0) {
-            throw "cargo install cargo-cyclonedx failed with exit code $LASTEXITCODE"
-          }
 
           $sbomTag = "sbom-$env:BUILD_ARCH"
           cargo cyclonedx --format json --target $env:BUILD_TARGET --override-filename $sbomTag
