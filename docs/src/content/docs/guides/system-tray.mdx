@@ -1,0 +1,55 @@
+---
+title: System Tray Companion
+description: Manage virtual displays, HDR, resolutions, render GPUs, and Sunshine sessions from the Windows notification area using zerovdd-tray.exe.
+---
+
+`zerovdd-tray.exe` is a native Win32 notification-area companion bundled with the ZeroVDD MSI (`ZeroVDD Tray` in the Start Menu) and portable ZIP archive.
+
+## Design Properties
+
+- **Zero background polling:** `zerovdd-tray.exe` does not run a background polling loop. It queries `zerovdd-svc` over `\\.\pipe\zerovdd-svc` lazily only when you click the tray icon, consuming ~0% idle CPU.
+- **Unprivileged by default:** Every display, GPU, and session action runs through `zerovdd-svc` without Administrator privileges. Only **Configure Sunshine...** triggers a UAC prompt (`ShellExecuteW("runas")`) to edit `C:\Program Files\Sunshine\config\sunshine.conf`.
+- **Single-instance & Explorer-restart resilient:** Guards against duplicate launches via `Local\ZeroVddTraySingleInstance` and re-attaches automatically on `TaskbarCreated` (and defers attachment via a one-shot timer if started during early logon before `Shell_TrayWnd` exists).
+- **Graceful offline mode:** If `zerovdd-svc` is stopped, the header shows `ZeroVDD -- Service Offline` and disables pipe-dependent entries while keeping local tools (`Open config.toml`, `Copy Doctor Report (JSON)`, `Start with Windows`, `Exit`) active.
+
+## Menu Actions
+
+| Menu Section | Actions |
+| :--- | :--- |
+| **Status Header** | Read-only live status (`Idle`, `N Virtual Displays`, `Sunshine Active (<client>)`, or `Service Offline`). |
+| **Quick Add Display** | Curated presets: `1920x1080 @ 60 (Extend)`, `2560x1440 @ 120 (Extend)`, `3840x2160 @ 60 HDR (Extend)`, `3840x2160 @ 120 HDR (Isolate)`, `3440x1440 @ 120 (Extend)`, and `1080x1920 Portrait @ 60 (Extend)`. |
+| **Active Displays (N)** | Per-display submenu with **Remove Display**, **Toggle HDR** (in place), and **Switch Resolution** (`1080p @ 60 Hz`, `1440p @ 120 Hz`, `4K @ 60 Hz`, `4K @ 120 Hz` with checkmark on the current mode). |
+| **Render GPU** | Switch between `Auto (Best Dedicated GPU)` and each enumerated DXGI adapter (showing VRAM and `[Best]` / `[Software]` tags). |
+| **Sunshine** | Live streaming status, **Stop Active Session** (when active), and **Configure Sunshine...** (elevated `sunshine configure --apply --clear-output-name`). |
+| **Restore Physical Displays** | Sends `RestoreTopology` to depart virtual displays and restore physical monitors. |
+| **Open config.toml** | Opens `%ProgramData%\zerovdd\config.toml` in your default editor (creating a valid default config first if missing). |
+| **Copy Doctor Report (JSON)** | Runs `zerovdd.exe doctor --json` with no console flash and copies the JSON report to the Windows clipboard. |
+| **Start with Windows** | Toggles `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\ZeroVDD`. |
+| **Exit** | Removes the tray icon and exits cleanly while leaving `zerovdd-svc` running. |
+
+## Headless Diagnostics (`--check-only`)
+
+Verify service IPC connectivity and menu model generation from any shell or script without opening a tray icon:
+
+```powershell
+zerovdd-tray.exe --check-only
+```
+
+Example output:
+
+```json
+{
+  "service_online": true,
+  "status_header": "ZeroVDD -- Idle (0 virtual displays)",
+  "active_displays": 0,
+  "gpu_count": 3,
+  "menu_item_count": 13
+}
+```
+
+Pass `--debug` in a debug console build to print verbose Win32 tray and IPC action logs to stderr.
+
+## What to Read Next
+
+- [Quickstart](/getting-started/quickstart/) for CLI workflows.
+- [IPC and Security Reference](/reference/ipc-and-security/) for the named-pipe DACL protecting `\\.\pipe\zerovdd-svc`.

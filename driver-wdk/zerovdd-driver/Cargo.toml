@@ -1,0 +1,26 @@
+[package]
+name = "zerovdd-driver"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "zerovdd"
+crate-type = ["cdylib"]
+doctest = false
+test = false
+
+[dependencies]
+zerovdd-engine = { path = "../../crates/zerovdd-engine", default-features = false }
+zerovdd-iddcx-sys = { path = "../zerovdd-iddcx-sys" }
+zerovdd-modes = { path = "../../crates/zerovdd-modes", default-features = false }
+zerovdd-proto = { path = "../../crates/zerovdd-proto", default-features = false }
+spin = { version = "0.12", default-features = false, features = ["mutex", "spin_mutex", "rwlock"] }
+wdk-sys = "0.5.2"
+
+[build-dependencies]
+wdk-build = "0.6.0"
+
+[lints]
+workspace = true

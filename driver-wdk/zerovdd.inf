@@ -1,0 +1,65 @@
+[Version]
+Signature   = "$Windows NT$"
+Class       = Display
+ClassGuid   = {4d36e968-e325-11ce-bfc1-08002be10318}
+ClassVer    = 2.0
+Provider    = %ManufacturerName%
+CatalogFile = zerovdd.cat
+DriverVer   = 11/24/2026,0.1.0.0
+PnpLockdown = 1
+
+[Manufacturer]
+%ManufacturerName% = Standard,NTamd64.10.0...22621,NTarm64.10.0...22621
+
+[Standard.NTamd64.10.0...22621]
+%DeviceName% = ZeroVdd_Install, Root\ZeroVdd
+
+[Standard.NTarm64.10.0...22621]
+%DeviceName% = ZeroVdd_Install, Root\ZeroVdd
+
+[SourceDisksNames]
+1 = %DiskName%,,,""
+
+[SourceDisksFiles]
+zerovdd.dll = 1
+
+[DestinationDirs]
+UMDriverCopy = 13
+
+[UMDriverCopy]
+zerovdd.dll
+
+[ZeroVdd_Install.NT]
+Include   = WUDFRD.inf
+Needs     = WUDFRD.NT
+CopyFiles = UMDriverCopy
+
+[ZeroVdd_Install.NT.HW]
+Include = WUDFRD.inf
+Needs   = WUDFRD.NT.HW
+AddReg  = ZeroVdd_AddReg_HW
+
+[ZeroVdd_AddReg_HW]
+HKR,,"UpperFilters",0x00010008,"IndirectKmd"
+HKR,"WUDF","DeviceGroupId",0x00000000,"ZeroVddGroup"
+HKR,,Security,,"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;UD)"
+
+[ZeroVdd_Install.NT.Services]
+Include = WUDFRD.inf
+Needs   = WUDFRD.NT.Services
+
+[ZeroVdd_Install.NT.Wdf]
+UmdfService                = zerovdd, ZeroVdd_UMDF_Install
+UmdfServiceOrder           = zerovdd
+UmdfKernelModeClientPolicy = AllowKernelModeClients
+UmdfImpersonationLevel     = Identification
+
+[ZeroVdd_UMDF_Install]
+UmdfLibraryVersion = 2.33.0
+ServiceBinary      = %13%\zerovdd.dll
+UmdfExtensions     = IddCx0102
+
+[Strings]
+ManufacturerName = "ZeroVDD"
+DeviceName       = "ZeroVDD Virtual Display Adapter"
+DiskName         = "ZeroVDD Installation Disk"

@@ -1,0 +1,84 @@
+---
+title: Displays and Layouts
+description: Control virtual display resolution, fractional refresh rates, portrait orientation, explicit desktop coordinates, primary assignment, and topology restoration.
+---
+
+ZeroVDD's mode planner uses 64-bit VESA CVT-RBv2 timing math (supporting up to `7680x4320@240Hz` and fractional `59.94`, `119.88`, and `239.76 Hz` rates) paired with Windows CCD topology orchestration.
+
+## Resolutions & Fractional Refresh Rates
+
+Pass `<Width>x<Height>@<Hz>` as the positional argument to `zerovdd display add` or `zerovdd display set-mode`:
+
+```powershell
+# Standard 1440p at 120 Hz extended next to physical monitors
+zerovdd display add 2560x1440@120 --name "DeskRight" --extend
+
+# Fractional NTSC 4K at 59.94 Hz (60000/1001)
+zerovdd display add 3840x2160@59.94 --name "LivingRoomTV" --hdr --isolated
+
+# Update resolution and refresh rate in place without detaching
+zerovdd display set-mode 3024x1890@119.88 --name "DeskRight"
+```
+
+ZeroVDD publishes a capped native multi-refresh ladder for the requested geometry so Windows Display Settings and games can switch cleanly between standard and fractional refresh rates without flickering.
+
+## Portrait Orientation, Coordinates & Primary Assignment
+
+When extending your desktop (`--extend`), you can control clockwise rotation (`0`, `90`, `180`, `270`), explicit desktop origin (`--position X,Y`, including negative coordinates to the left or above your primary monitor), and primary assignment (`--primary`):
+
+```powershell
+# Portrait 1080x1920 monitor placed directly to the left of primary (0,0) with 140 PPI (~150% DPI)
+zerovdd display add 1920x1080@60 `
+  --name "SidePortrait" `
+  --extend `
+  --orientation 90 `
+  --position -1080,0 `
+  --ppi 140
+
+# Extended virtual display promoted to primary (0,0) while keeping physical monitors active
+zerovdd display add 2560x1440@120 --name "MainVirtual" --extend --primary
+```
+
+:::note[Portrait dimensions in Windows CCD]
+For `90` and `270` degree orientations, ZeroVDD automatically swaps the CCD source surface width and height (`1080x1920` for a `1920x1080` panel) while keeping the driver's physical target timing in native panel orientation (`1920x1080`), preventing stretched or clipped desktops.
+:::
+
+## Isolate vs. Extend Modes
+
+| Flag | Behavior | Physical Monitors |
+| :--- | :--- | :--- |
+| `--extend` | Adds the virtual monitor alongside active physical monitors at `--position` (or automatically to the right of the rightmost monitor). | Remain enabled |
+| `--isolated` | Snapshots physical layout to `topology-backup.json`, disables physical monitors, and sets the virtual display as sole primary at `(0, 0)`. | Disabled until restored |
+
+## Persistent Displays in `config.toml`
+
+To keep one or more virtual displays attached automatically whenever `zerovdd-svc` runs, add `[[persistent_displays]]` entries to `%ProgramData%\zerovdd\config.toml`:
+
+```toml title="config.toml"
+[[persistent_displays]]
+name = "SidePortrait"
+width = 1920
+height = 1080
+refresh_mhz = 60000
+hdr = false
+orientation = 90
+position = [-1080, 0]
+primary = false
+target_ppi = 140
+```
+
+See the [Configuration Reference](/reference/configuration/) for all supported fields.
+
+## Restoring Physical Topology
+
+To stop any active session, depart all virtual displays, and restore physical monitors (from `topology-backup.json`, falling back to enabling all attached physical paths if no snapshot exists):
+
+```powershell
+zerovdd display restore
+```
+
+## What to Read Next
+
+- [EDID, HDR, and Color](/guides/edid-hdr-and-color/) for custom EDIDs, color spaces, bit-depth caps, and HDR10 metadata.
+- [System Tray Companion](/guides/system-tray/) for one-click preset creation and restoration.
+- [CLI Reference](/reference/cli/) for exact flag syntax on `display add`, `display set-mode`, and `display remove`.

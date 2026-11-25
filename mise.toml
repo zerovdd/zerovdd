@@ -1,0 +1,125 @@
+# Single local command runner for zerovdd.
+# On Windows, bash-backed tasks invoke Git Bash explicitly (avoiding C:\Windows\system32\bash.exe WSL).
+
+[tools]
+pnpm = "9.15.9"
+
+[tasks.setup]
+description = "Configure .githooks and verify local toolchain and cargo tools"
+run = "bash scripts/repo-lints.sh --setup"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/repo-lints.sh --setup) else (bash scripts/repo-lints.sh --setup)'
+
+[tasks.fmt]
+description = "Format all Rust workspace crates (and driver-wdk when present)"
+run = "bash scripts/repo-lints.sh --fmt"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/repo-lints.sh --fmt) else (bash scripts/repo-lints.sh --fmt)'
+
+[tasks."fmt:check"]
+description = "Check Rust formatting across all workspace crates (and driver-wdk when present)"
+run = "bash scripts/repo-lints.sh --fmt-check"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/repo-lints.sh --fmt-check) else (bash scripts/repo-lints.sh --fmt-check)'
+
+[tasks.lint]
+description = "Run Clippy across the workspace with warnings denied"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
+
+[tasks."check:win"]
+description = "Typecheck Windows user-mode crates against x86_64-pc-windows-msvc"
+run = "bash scripts/repo-lints.sh --check-win"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/repo-lints.sh --check-win) else (bash scripts/repo-lints.sh --check-win)'
+
+[tasks."check:nostd"]
+description = "Verify no_std Layer 0/1 crates compile with --no-default-features"
+run = "bash scripts/repo-lints.sh --check-nostd"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/repo-lints.sh --check-nostd) else (bash scripts/repo-lints.sh --check-nostd)'
+
+[tasks."lints:static"]
+description = "Run compiled static repository lints"
+run = "cargo test -p zerovdd-checks --test static_lints"
+
+[tasks."test:scripts"]
+description = "Run hook and shell script integration tests in isolated temp git repos"
+run = "cargo test -p zerovdd-checks --test script_tests"
+
+[tasks.test]
+description = "Run workspace unit and integration tests (zero WDK required)"
+run = "cargo test --workspace --quiet"
+
+[tasks."driver:build"]
+description = "Build WDK driver package and run InfVerif /u /h, ApiValidator, and Inf2Cat (Windows)"
+run = "echo 'driver:build requires Windows with WDK installed' >&2; exit 1"
+run_windows = "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-driver.ps1"
+
+[tasks.machete]
+description = "Check for unused Cargo dependencies"
+run = "cargo machete"
+
+[tasks."audit:rust"]
+description = "Run cargo-audit vulnerability and yank check"
+run = "cargo audit"
+
+[tasks."deny:rust"]
+description = "Run cargo-deny licenses, advisories, bans, and sources checks"
+run = "cargo deny check all"
+
+[tasks."check:emdash"]
+description = "Run diff-scoped em-dash gate"
+run = "bash scripts/check-emdash-diff.sh"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/check-emdash-diff.sh) else (bash scripts/check-emdash-diff.sh)'
+
+[tasks."check:drift"]
+description = "Verify AGENTS.md mirror and version lockstep"
+run = "bash scripts/repo-lints.sh --check-drift"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/repo-lints.sh --check-drift) else (bash scripts/repo-lints.sh --check-drift)'
+
+[tasks."check:clean"]
+description = "Verify git working tree has no uncommitted or untracked files"
+run = "bash scripts/repo-lints.sh --check-clean-tree"
+run_windows = 'if exist "C:\Program Files\Git\bin\bash.exe" ("C:\Program Files\Git\bin\bash.exe" scripts/repo-lints.sh --check-clean-tree) else (bash scripts/repo-lints.sh --check-clean-tree)'
+
+[tasks."docs:dev"]
+description = "Run the Starlight documentation dev server with live reload"
+dir = "docs"
+run = "pnpm install --frozen-lockfile && pnpm dev"
+
+[tasks."docs:build"]
+description = "Build the Starlight documentation site"
+dir = "docs"
+run = "pnpm install --frozen-lockfile && pnpm build"
+
+[tasks."docs:preview"]
+description = "Preview the built Starlight documentation site locally"
+dir = "docs"
+run = "pnpm preview"
+
+[tasks.ci]
+description = "Run the full fast local verification suite"
+depends = [
+    "fmt:check",
+    "lint",
+    "check:win",
+    "check:nostd",
+    "lints:static",
+    "test:scripts",
+    "test",
+    "machete",
+]
+
+[tasks."verify:agent"]
+description = "Single authoritative agent verification gate (ci + deny + emdash + drift)"
+depends = [
+    "ci",
+    "deny:rust",
+    "check:emdash",
+    "check:drift",
+]
+
+[tasks."release:preflight"]
+description = "Full release preflight gate (versions, clean tree, ci, audit, deny)"
+depends = [
+    "check:drift",
+    "check:clean",
+    "ci",
+    "audit:rust",
+    "deny:rust",
+]

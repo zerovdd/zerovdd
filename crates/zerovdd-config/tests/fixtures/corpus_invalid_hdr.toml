@@ -1,0 +1,7 @@
+schema_version = 1
+
+[hdr_defaults]
+enabled = true
+max_luminance_nits = 1000
+max_fall_nits = 2000
+min_luminance_ten_thousandths = 500

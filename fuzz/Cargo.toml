@@ -1,0 +1,46 @@
+[package]
+name = "zerovdd-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+arbitrary = { version = "1", features = ["derive"] }
+libfuzzer-sys = "0.4"
+zerovdd-config = { path = "../crates/zerovdd-config" }
+zerovdd-edid = { path = "../crates/zerovdd-edid" }
+zerovdd-modes = { path = "../crates/zerovdd-modes" }
+zerovdd-proto = { path = "../crates/zerovdd-proto", features = ["std"] }
+
+[[bin]]
+name = "proto_decode"
+path = "fuzz_targets/proto_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "edid_parse"
+path = "fuzz_targets/edid_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "modes_plan"
+path = "fuzz_targets/modes_plan.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_parse"
+path = "fuzz_targets/config_parse.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,4 @@
+msrv = "1.100.0"
+allow-dbg-in-tests = false
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true

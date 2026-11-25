@@ -1,0 +1,88 @@
+---
+title: EDID, HDR, and Color
+description: Configure synthesized EDID physical sizing (PPI), BT.709 / BT.2020 / DCI-P3 gamuts, 8 / 10 / 12 bpc bit-depth caps, HDR10 luminance overrides, custom EDID binaries, and Windows 11 24H2 split HDR/ACM.
+---
+
+ZeroVDD controls what Windows believes about each virtual monitor through a synthesized EDID 1.4 + CTA-861-G descriptor (or a verbatim user-supplied EDID binary) paired with driver ABI v1.1 color and bit-depth signaling.
+
+## Synthesized EDID & Target PPI (`--ppi`)
+
+Many virtual display drivers leave physical dimensions zeroed or fixed at tiny sizes, causing Windows to apply 250-300% DPI scaling on 4K virtual monitors. By default, ZeroVDD calculates realistic ~96-110 PPI physical dimensions in both EDID Block 0 (`cm`) and the preferred DTD (`mm`).
+
+Override the synthesized pixel density (`48..=600` PPI) per display with `--ppi` (or `target_ppi` in `config.toml`):
+
+```powershell
+# Target ~140 PPI so Windows recommends ~150% DPI scaling
+zerovdd display add 1920x1080@60 --name "TabletDisplay" --ppi 140 --extend
+```
+
+## Color Space, Bit Depth & HDR10 Mastering Luminance
+
+Specify gamut, per-component bit-depth cap, and HDR10 mastering metadata per display on `display add` or `display set-mode`:
+
+```powershell
+# 4K 120 Hz HDR10 with DCI-P3 primaries, 10 bpc cap, and 1000-nit mastering luminance
+zerovdd display add 3840x2160@120 `
+  --name "OledClient" `
+  --hdr `
+  --color-space dci-p3 `
+  --bpc 10 `
+  --max-nits 1000 `
+  --max-fall 400 `
+  --min-nits-10k 50 `
+  --extend
+```
+
+| Option | Values | Notes |
+| :--- | :--- | :--- |
+| `--hdr` / `--sdr` | flag | Enables HDR10 (SMPTE ST 2084 PQ) or switches back to SDR (`set-mode`). |
+| `--color-space` | `auto`, `bt709`, `bt2020`, `dci-p3` | `auto` selects `bt709` for SDR and `bt2020` for HDR10. `bt2020` and `dci-p3` require `--hdr`; `bt709` requires SDR. |
+| `--bpc` | `auto`, `8`, `10`, `12` | `auto` advertises `8\|10` bpc for SDR and `10\|12` bpc for HDR10. `8` bpc is SDR-only. Sets both EDID Block 0 byte 20 and IddCx RGB bit-depth flags. |
+| `--max-nits` | `100..=10000` | Peak HDR10 mastering luminance in nits (default `1000`). |
+| `--max-fall` | `1..=max-nits` | Max frame-average light level in nits (default `400`). |
+| `--min-nits-10k` | `0..=max*10000` | Minimum mastering luminance in `0.0001`-nit units (`500` = `0.05` nits, `50` = `0.005` nits). |
+
+:::note[Default HDR10 Metadata]
+When per-display luminance flags are omitted, `zerovdd-svc` uses `[hdr_defaults]` from `%ProgramData%\zerovdd\config.toml`.
+:::
+
+## Custom EDID Loading & Inspector
+
+ZeroVDD accepts raw binary EDID files (`128..=512` bytes, multiple of `128`) and validates header signature, block count, per-block checksums, and CTA-861-G offsets before handing bytes to the driver.
+
+### Inspect a Binary EDID File
+
+```powershell
+zerovdd edid inspect .\monitor.bin
+zerovdd edid inspect .\monitor.bin --json
+```
+
+`edid inspect` prints EDID version/revision, PNP manufacturer ID, product name, physical dimensions (`cm` and DTD `mm`), preferred DTD timing, chromaticity coordinates, sRGB bit, and CTA-861-G video/colorimetry/HDR static metadata blocks. Invalid files exit non-zero with the exact validation error.
+
+### Attach a Display with a Custom EDID
+
+```powershell
+zerovdd display add 2560x1440@120 --name "CustomPanel" --edid .\monitor.bin --extend
+```
+
+For service-managed displays, set `edid_path` on a `[[persistent_displays]]` entry or `default_edid_path` under `[sunshine]` in `config.toml`:
+
+- If a `[[persistent_displays]]` entry references an unreadable or invalid `edid_path`, `zerovdd-svc` logs an error and skips that display cleanly.
+- If `sunshine.default_edid_path` is unreadable or invalid, `zerovdd-svc` logs a warning and falls back to a synthesized EDID so streaming still starts.
+
+## Windows 11 24H2 Split HDR / ACM Behavior
+
+Windows changed Advanced Color APIs in **Windows 11 24H2 (OS build `26100`+)**:
+
+| Windows 11 Version | APIs Used by ZeroVDD | Behavior |
+| :--- | :--- | :--- |
+| **22H2 / 23H2** (`22621`..`26099`) | `GET_ADVANCED_COLOR_STATE` / `SET_ADVANCED_COLOR_STATE` | Single unified Advanced Color toggle. |
+| **24H2+** (`26100`+) | `GET_ADVANCED_COLOR_INFO_2`, `SET_HDR_STATE`, `SET_WCG_STATE` | Splits **HDR** from **Auto Color Management (ACM / WCG)** so toggling HDR on a virtual display never enables or corrupts ACM on physical monitors. |
+
+ZeroVDD detects the real OS build via `RtlGetVersion` (avoiding manifest-shimmed version APIs) and selects the right path automatically. Verify which profile is active via `zerovdd doctor`.
+
+## What to Read Next
+
+- [Displays and Layouts](/guides/displays-and-layouts/) for positioning and orientation.
+- [Configuration Reference](/reference/configuration/) for `config.toml` color and EDID keys.
+- [Troubleshooting](/guides/troubleshooting/) if a virtual display looks washed out or HDR fails to engage.

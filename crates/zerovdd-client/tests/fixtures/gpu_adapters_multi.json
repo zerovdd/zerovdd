@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Microsoft Basic Render Driver",
+    "adapter_luid_low": 4096,
+    "adapter_luid_high": 0,
+    "vendor_id": 5140,
+    "device_id": 140,
+    "pci_bus": null,
+    "pci_device": null,
+    "pci_function": null,
+    "dedicated_vram_bytes": 68719476736,
+    "is_software": true
+  },
+  {
+    "name": "Intel(R) UHD Graphics 770",
+    "adapter_luid_low": 65537,
+    "adapter_luid_high": 0,
+    "vendor_id": 32902,
+    "device_id": 18048,
+    "pci_bus": 0,
+    "pci_device": 2,
+    "pci_function": 0,
+    "dedicated_vram_bytes": 134217728,
+    "is_software": false
+  },
+  {
+    "name": "NVIDIA GeForce RTX 4090",
+    "adapter_luid_low": 65538,
+    "adapter_luid_high": 0,
+    "vendor_id": 4318,
+    "device_id": 9860,
+    "pci_bus": 1,
+    "pci_device": 0,
+    "pci_function": 0,
+    "dedicated_vram_bytes": 25769803776,
+    "is_software": false
+  },
+  {
+    "name": "AMD Radeon RX 7900 XTX",
+    "adapter_luid_low": 65539,
+    "adapter_luid_high": 0,
+    "vendor_id": 4098,
+    "device_id": 29772,
+    "pci_bus": 6,
+    "pci_device": 0,
+    "pci_function": 0,
+    "dedicated_vram_bytes": 25753026560,
+    "is_software": false
+  }
+]

@@ -1,0 +1,115 @@
+---
+title: Troubleshooting
+description: Interpret real zerovdd doctor output, capture ETW traces, and resolve common Control Device, WUDFHost, HVCI, HDR/ACM, Sunshine, and topology backup issues.
+---
+
+Start every investigation by running `zerovdd doctor` from an **elevated Administrator** prompt so it can inspect both `\ZeroVddControl` and `WUDFHost.exe` loaded modules:
+
+```powershell
+zerovdd doctor
+zerovdd doctor --json
+```
+
+## Reading `zerovdd doctor` Output
+
+Below is a healthy Windows 11 24H2 (`build 26300`) `zerovdd doctor` output with each section explained:
+
+```text
+zerovdd doctor (v0.1.0, x86_64)
+OS HDR/ACM profile: Win11 24H2+ (split HDR/ACM via SET_HDR_STATE/SET_WCG_STATE)
+  OS version: 10.0.26300
+Driver Installation:
+  Installed: true
+  OEM INF: oem4.inf
+  Driver Store INF: C:\WINDOWS\System32\DriverStore\FileRepository\zerovdd.inf_amd64_4b1d669848883229\zerovdd.inf
+  DIRID 13 isolated: true
+  Version: 0.1.0.0
+  Signer: ZeroVDD Development Test Signing
+  Device nodes: 1
+    - ROOT\ZEROVDD\0000 (present=true, problem=0)
+WUDFHost.exe processes: 4
+  - PID 11208 | private=2 MiB | ws=12 MiB | handles=446 | zerovdd.dll=false
+  - PID 36648 | private=5 MiB | ws=16 MiB | handles=404 | zerovdd.dll=true
+GPUs (3):
+  - AMD Radeon RX 6800 | LUID=0x12341:0x0 | VRAM=16337 MiB | software=false
+  - Microsoft Basic Render Driver | LUID=0x14ee0:0x0 | VRAM=0 MiB | software=true
+Control Device: Accessible { device_path: "\\\\?\\ROOT#ZEROVDD#0000#{2963ae53-4cf3-4385-929a-a8348595217e}\\ZeroVddControl", protocol_version: (1, 1, 0), adapter_ready: true, hdr_capable: true, uptime_secs: 3470, last_gpu_switch_failed: false }
+Active virtual displays: 0
+Service (zerovdd-svc): state=running
+  IPC health: v0.1.0 connected=true displays=0 uptime=3470s
+```
+
+Key signals to verify:
+
+- **`DIRID 13 isolated: true`** and **`problem=0`** on `ROOT\ZEROVDD\0000`: Driver Store packaging and PnP device start succeeded.
+- **`zerovdd.dll=true`** on one `WUDFHost.exe` process: UMDF loaded `zerovdd.dll`.
+- **`Control Device: Accessible`** with `protocol_version: (1, 1, 0)` and `adapter_ready: true`: Control interface handshake and `IddCxAdapterInitAsync` succeeded.
+- **`Service (zerovdd-svc): state=running`** and **`connected=true`**: Session-0 service is live and holding a healthy driver connection.
+
+## Capturing Driver ETW Traces
+
+`zerovdd.dll` logs non-blocking TraceLogging events under provider `ZeroVdd.Driver` (`{06714745-69DC-41FF-9684-C532D5183A74}`). Capture a 10-second trace from an elevated prompt:
+
+```powershell
+zerovdd doctor --capture-etw 10
+```
+
+This writes `%TEMP%\zerovdd-driver.etl`, inspectable in Windows Performance Analyzer (WPA) or via `tracerpt`. See [Doctor and ETW Reference](/reference/doctor-and-etw/).
+
+---
+
+## Common Issues & Fixes
+
+### 1. `ERROR_ACCESS_DENIED` Opening `\ZeroVddControl`
+
+- **Symptom:** `zerovdd doctor` reports `control_device.state = "access_denied"`, or `zerovdd display add ... --hold` fails with access denied.
+- **Cause:** `\ZeroVddControl` enforces a `SYSTEM` + `Administrators` check in `EvtDeviceFileCreate`. Non-elevated callers are denied direct Control Device handles by design (while DWM, DXGI, and games continue accessing the `Class=Display` adapter normally).
+- **Fix:**
+  - Ensure `zerovdd-svc` is running (`sc query zerovdd-svc`). When running, `zerovdd display`, `zerovdd sunshine`, and `zerovdd-tray.exe` route through `\\.\pipe\zerovdd-svc` without elevation.
+  - Or run standalone `--hold` / `--lease` and full `zerovdd doctor` checks from an elevated Administrator prompt.
+
+### 2. Driver Not Loaded, Code `31`, or GPU Reset (TDR)
+
+- **Symptom:** `control_device.state = "not_installed"`, no `WUDFHost.exe` shows `zerovdd.dll=true`, or Device Manager displays Code `31`, `43`, or `52`.
+- **Checks:**
+  1. Run `zerovdd doctor` elevated (non-elevated `CreateToolhelp32Snapshot` cannot inspect `WUDFHost.exe` modules).
+  2. Run `zerovdd setup status` to confirm an `oem*.inf` and `Root\ZeroVdd` node exist with `problem=0`.
+  3. **Code `31` (`0x80070241` / `CodeIntegrity` Event `3004`):** Occurs when loading a self-signed local build while Memory Integrity (HVCI) is ON and `testsigning` is OFF. Enable `bcdedit /set testsigning on` on a test host or install a SignPath / Partner Center signed release.
+  4. **After GPU reset (`Win+Ctrl+Shift+B`) or TDR:** Check `last_gpu_switch_failed` in `zerovdd doctor`. If `true`, run `zerovdd display switch-gpu auto` and verify `[gpu]` in `config.toml`.
+
+### 3. Washed-Out HDR or ACM Flipping on Physical Monitors
+
+- **Symptom:** Virtual display looks washed out, HDR flips Auto Color Management (ACM) instead of HDR, or physical monitor ACM changes after a stream.
+- **Checks:**
+  1. Confirm `OS HDR/ACM profile` in `zerovdd doctor` shows `Win11 24H2+ (split HDR/ACM ...)` on builds `>= 26100`.
+  2. Confirm `dd_configuration_option = disabled` is set in `sunshine.conf` (via `zerovdd sunshine configure --apply`) so Sunshine's older switcher does not race with ZeroVDD.
+  3. Confirm `--hdr` (CLI) or `SUNSHINE_CLIENT_HDR=true` (Sunshine) was sent and `hdr_capable: true` appears in `zerovdd doctor`.
+
+### 4. Pinned `output_name` or Black Screen in Sunshine
+
+- **Symptom:** `zerovdd sunshine configure` warns that `sunshine.conf` pins `output_name = ...`, or Moonlight connects to a black screen in `isolate` mode.
+- **Fix:** Clear the pinned display and restart Sunshine:
+
+  ```powershell
+  zerovdd sunshine configure --apply --clear-output-name
+  ```
+
+  If the host has zero physical monitors connected, enable `headless_standby = true`. See [Headless Hosts](/guides/headless-hosts/).
+
+### 5. Stale `%ProgramData%\zerovdd\topology-backup.json`
+
+- **Symptom:** Physical monitors did not restore after a hard power loss, or `zerovdd sunshine status` reports `backup_present=true` when idle.
+- **Fix:**
+  1. Run `zerovdd display restore` (or `zerovdd sunshine stop --force`).
+  2. If you already rearranged monitors manually in Windows Display Settings and do **not** want the old backup re-applied:
+
+     ```powershell
+     Stop-Service zerovdd-svc
+     Remove-Item "$env:ProgramData\zerovdd\topology-backup.json" -Force
+     Start-Service zerovdd-svc
+     ```
+
+## What to Read Next
+
+- [Doctor and ETW Reference](/reference/doctor-and-etw/) for the full JSON telemetry schema.
+- [Session-0 Trampoline Architecture](/architecture/session-zero-trampoline/) to understand why CCD operations run in the console session.

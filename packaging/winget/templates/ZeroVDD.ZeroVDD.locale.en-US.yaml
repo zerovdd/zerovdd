@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.9.0.schema.json
+PackageIdentifier: ZeroVDD.ZeroVDD
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: ZeroVDD Contributors
+PublisherUrl: https://zerovdd.dev
+PublisherSupportUrl: https://github.com/zerovdd/zerovdd/issues
+PackageName: ZeroVDD Virtual Display Driver
+PackageUrl: https://zerovdd.dev
+License: MIT OR Apache-2.0
+LicenseUrl: https://github.com/zerovdd/zerovdd/blob/main/LICENSE
+ShortDescription: Windows 11 UMDF 2 / IddCx 1.10 Virtual Display Driver with HDR10, custom EDIDs, native system tray, and Sunshine integration.
+Tags:
+  - display
+  - virtual-display
+  - iddcx
+  - hdr
+  - sunshine
+ManifestType: defaultLocale
+ManifestVersion: 1.9.0

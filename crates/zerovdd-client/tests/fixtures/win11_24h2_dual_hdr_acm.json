@@ -1,0 +1,89 @@
+{
+  "os_build": 26100,
+  "paths": [
+    {
+      "adapter_luid": { "low": 65537, "high": 0 },
+      "target_id": 256,
+      "source_id": 0,
+      "gdi_name": "\\\\.\\DISPLAY1",
+      "monitor_friendly_name": "LG UltraGear OLED",
+      "active": true,
+      "target_available": true,
+      "width": 2560,
+      "height": 1440,
+      "origin_x": 0,
+      "origin_y": 0,
+      "refresh_num": 144000,
+      "refresh_den": 1000,
+      "scaling": "identity",
+      "rotation": "identity",
+      "scanline_ordering": "progressive",
+      "hdr_state": {
+        "hdr_supported": true,
+        "hdr_enabled": true,
+        "wcg_supported": true,
+        "wcg_acm_enabled": false,
+        "limited_by_policy": false,
+        "bits_per_color_channel": 10,
+        "active_color_mode": "hdr",
+        "color_encoding": 0
+      }
+    },
+    {
+      "adapter_luid": { "low": 65537, "high": 0 },
+      "target_id": 257,
+      "source_id": 1,
+      "gdi_name": "\\\\.\\DISPLAY2",
+      "monitor_friendly_name": "Dell U2723QE",
+      "active": true,
+      "target_available": true,
+      "width": 3840,
+      "height": 2160,
+      "origin_x": 2560,
+      "origin_y": 0,
+      "refresh_num": 60000,
+      "refresh_den": 1000,
+      "scaling": "identity",
+      "rotation": "identity",
+      "scanline_ordering": "progressive",
+      "hdr_state": {
+        "hdr_supported": false,
+        "hdr_enabled": false,
+        "wcg_supported": true,
+        "wcg_acm_enabled": true,
+        "limited_by_policy": false,
+        "bits_per_color_channel": 10,
+        "active_color_mode": "wcg",
+        "color_encoding": 0
+      }
+    },
+    {
+      "adapter_luid": { "low": 98305, "high": 0 },
+      "target_id": 1,
+      "source_id": 0,
+      "gdi_name": "\\\\.\\DISPLAY3",
+      "monitor_friendly_name": "ZeroVDD Virtual Display",
+      "active": false,
+      "target_available": true,
+      "width": 1920,
+      "height": 1080,
+      "origin_x": 0,
+      "origin_y": 0,
+      "refresh_num": 60000,
+      "refresh_den": 1000,
+      "scaling": "identity",
+      "rotation": "identity",
+      "scanline_ordering": "progressive",
+      "hdr_state": {
+        "hdr_supported": true,
+        "hdr_enabled": false,
+        "wcg_supported": false,
+        "wcg_acm_enabled": false,
+        "limited_by_policy": false,
+        "bits_per_color_channel": 10,
+        "active_color_mode": "sdr",
+        "color_encoding": 0
+      }
+    }
+  ]
+}

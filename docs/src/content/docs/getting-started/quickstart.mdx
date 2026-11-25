@@ -1,0 +1,87 @@
+---
+title: Quickstart
+description: Create your first virtual display, update its mode in place, launch the native tray companion, and restore your desktop cleanly.
+---
+
+import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+ZeroVDD attaches **zero virtual monitors at boot** by default so your physical desktop stays untouched until you request a virtual display.
+
+## Your First Virtual Display
+
+<Steps>
+1. **Check system health:**
+
+   ```powershell
+   zerovdd doctor
+   ```
+
+   Confirm `Service (zerovdd-svc): state=running` and `IPC health: ... connected=true`. (If running from a standard non-elevated terminal, `Control Device` reports `AccessDenied` while `Service` IPC reports `connected=true`, which is expected.)
+
+2. **Add an extended virtual display:**
+
+   ```powershell
+   zerovdd display add 2560x1440@120 --name "Tablet" --extend
+   ```
+
+   When `zerovdd-svc` is running, `zerovdd.exe` delegates over `\\.\pipe\zerovdd-svc`, so no Administrator prompt is needed.
+
+3. **List active virtual displays:**
+
+   ```powershell
+   zerovdd display list
+   ```
+
+   Note the `target_id` and `monitor_guid` printed for `"Tablet"`.
+
+4. **Update resolution, refresh rate, or HDR in place:**
+
+   ```powershell
+   zerovdd display set-mode 3840x2160@59.94 --hdr --name "Tablet"
+   ```
+
+5. **Remove the display or restore physical topology:**
+
+   ```powershell
+   zerovdd display remove --target-id <ID>
+   # or depart all virtual displays and restore saved physical layout:
+   zerovdd display restore
+   ```
+</Steps>
+
+## Service Mode vs. Standalone Mode
+
+<Tabs>
+  <TabItem label="Service Mode (Default)">
+    When `zerovdd-svc` is running, all `zerovdd display` and `zerovdd sunshine` commands execute over `\\.\pipe\zerovdd-svc`:
+
+    - Works from standard (non-elevated) terminals and Sunshine prep commands.
+    - Applies desktop topology (`--extend`, `--isolated`, `--orientation`, `--position`, `--primary`) inside the active console session.
+    - Supports persistent displays defined in `%ProgramData%\zerovdd\config.toml`.
+  </TabItem>
+  <TabItem label="Standalone Admin Mode (No Service)">
+    When `zerovdd-svc` is stopped, `zerovdd.exe` opens `\ZeroVddControl` directly (requires an **elevated Administrator** prompt) and requires an explicit lifetime flag:
+
+    - `--hold`: Keeps the Control Device handle open until `Ctrl+C` or process exit. Even on `taskkill /F`, the driver's `EvtFileCleanup` handler removes the monitor immediately.
+    - `--lease <SECS>`: Keeps the display attached for `<SECS>` seconds after `zerovdd.exe` exits.
+
+    ```powershell
+    # Temporary display held until Ctrl+C
+    zerovdd display add 1920x1080@60 --hold
+
+    # 5-minute leased display
+    zerovdd display add 2560x1440@120 --lease 300
+    ```
+  </TabItem>
+</Tabs>
+
+## Launch the Native System Tray Companion
+
+Open **ZeroVDD Tray** from the Start Menu (or run `zerovdd-tray.exe`) to add presets, toggle HDR, switch resolution or render GPU, inspect Sunshine status, and restore physical displays from the Windows notification area. See the [System Tray Companion](/guides/system-tray/) guide for details.
+
+## What to Read Next
+
+- [Sunshine Setup](/getting-started/sunshine/) for automatic Moonlight streaming displays.
+- [Displays and Layouts](/guides/displays-and-layouts/) for portrait rotation, coordinates, and multi-monitor positioning.
+- [EDID, HDR, and Color](/guides/edid-hdr-and-color/) for custom EDIDs, DCI-P3, bit-depth caps, and PPI control.
+- [CLI Reference](/reference/cli/) for every subcommand and flag.

@@ -1,0 +1,13 @@
+# Cargo-audit policy for zerovdd.
+# Any ignored advisory must carry a comment explaining the rationale and expiry review date.
+
+[advisories]
+ignore = []
+
+[database]
+fetch = true
+stale = false
+
+[yanked]
+enabled = true
+update_index = true

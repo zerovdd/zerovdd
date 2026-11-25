@@ -1,0 +1,28 @@
+[package]
+name = "zerovdd-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
+
+[features]
+default = ["std"]
+std = [
+    "zerovdd-edid/std",
+    "zerovdd-modes/std",
+    "zerovdd-proto/std",
+    "thiserror/std",
+]
+
+[dependencies]
+zerovdd-edid = { path = "../zerovdd-edid", default-features = false }
+zerovdd-modes = { path = "../zerovdd-modes", default-features = false }
+zerovdd-proto = { path = "../zerovdd-proto", default-features = false }
+spin.workspace = true
+thiserror.workspace = true

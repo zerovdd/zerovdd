@@ -1,0 +1,47 @@
+---
+title: Headless Hosts
+description: Run ZeroVDD on a Windows 11 host with no physical monitor connected using headless_standby so Sunshine encoder probing and Desktop Duplication initialize cleanly.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+On a Windows 11 streaming server with **no physical monitor attached** (or a DisplayPort/HDMI monitor powered completely off), Sunshine's startup encoder probe (`video::probe_encoders()`) and DXGI Desktop Duplication can fail if zero active displays exist when Windows boots.
+
+## Enable `headless_standby`
+
+<Steps>
+1. Edit `%ProgramData%\zerovdd\config.toml` and set `headless_standby = true`:
+
+   ```toml title="config.toml"
+   schema_version = 1
+   headless_standby = true
+   ```
+
+2. Restart `zerovdd-svc` from an elevated PowerShell prompt:
+
+   ```powershell
+   Restart-Service zerovdd-svc
+   ```
+
+3. Confirm the standby monitor is active:
+
+   ```powershell
+   zerovdd display list
+   ```
+</Steps>
+
+## How Headless Standby Works
+
+1. When `zerovdd-svc` starts and queries the active console display topology, if zero displays are active, it automatically attaches a `1920x1080@60` standby virtual monitor named `zerovdd-headless-standby`.
+2. Sunshine initializes its GPU hardware encoders cleanly against the standby display.
+3. When a Moonlight client connects, `zerovdd-svc` transitions directly to the client's exact resolution, refresh rate, and HDR profile (preserving any physical monitors if one was later plugged in).
+4. When the stream ends, if no physical monitor is connected, `zerovdd-svc` re-attaches `zerovdd-headless-standby` instead of leaving Windows with zero displays.
+
+:::tip[No HDMI Dummy Plug Required]
+With `headless_standby = true`, you do not need a physical HDMI/DisplayPort dummy plug, and unlike a dummy plug you never get stuck with a fixed dummy resolution or phantom second monitor when a real display is plugged in.
+:::
+
+## What to Read Next
+
+- [Sunshine Setup](/getting-started/sunshine/) for `sunshine.conf` configuration and crash recovery.
+- [Configuration Reference](/reference/configuration/) for all `config.toml` options.

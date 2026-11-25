@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# Commit-message hygiene gate:
+#   - Optional fail-open delegation to agent-guard commit-msg when installed
+#   - Blocks em dashes (unless line contains ok-emdash)
+#   - Blocks AI vendor attribution trailers/footers and robot emoji (U+1F916)
+
+set -euo pipefail
+
+MSG_FILE="${1:-}"
+if [ -z "$MSG_FILE" ] || [ ! -f "$MSG_FILE" ]; then
+    printf '[commit-msg] Missing commit message file path.\n' >&2
+    exit 1
+fi
+
+EMDASH_CHAR="$(printf '\xe2\x80\x94')"
+ROBOT_EMOJI_CHAR="$(printf '\xf0\x9f\xa4\x96')"
+COAUTHOR_AI_REGEX='co-authored-by:.*(^|[^a-z0-9_])(claude|anthropic|openai|chatgpt|gpt|copilot|gemini|cursor|devin|windsurf|aider|codex|ai)([^a-z0-9_]|$)'
+GENERATED_AI_REGEX='generated[[:space:]]+(with|by).*(^|[^a-z0-9_])(claude|anthropic|openai|chatgpt|gpt|copilot|gemini|cursor[[:space:]]+ai|devin|windsurf|aider|codex|an?[[:space:]]+(ai|llm|agent)|ai)([^a-z0-9_]|$)'
+MACHINE_WRITTEN_REGEX='(^|[^a-z0-9_])(machine[- ]written|posted[[:space:]]+by[[:space:]]+an?[[:space:]]+(ai|agent|bot))([^a-z0-9_]|$)'
+AUTHORED_AI_REGEX='(^|[^a-z0-9_])(this|the)[[:space:]]+(pr|pull[[:space:]]+request|comment|review|description|issue|commit|change)([[:space:]]+description)?[[:space:]]+((was|is)[[:space:]]+)?(written|generated|drafted|authored|created)[[:space:]]+(by|with|using)[[:space:]]+\[?(claude|codex|chatgpt|gpt|copilot|gemini|cursor|an?[[:space:]]+(ai|llm|agent))([^a-z0-9_]|$)'
+
+# Optional fail-open delegation: invoke agent-guard if present on PATH; skip if absent.
+if command -v agent-guard >/dev/null 2>&1; then
+    agent-guard commit-msg "$MSG_FILE"
+fi
+
+# Strip git comment lines and scissors diff payload.
+cleaned="$(awk '
+    /^# -+ >8 -+/ { exit }
+    /^#/ { next }
+    {
+        sub(/\r$/, "")
+        print
+    }
+' "$MSG_FILE")"
+
+violations=0
+
+while IFS= read -r line; do
+    if [[ "$line" == *"$EMDASH_CHAR"* ]] && [[ "$line" != *"ok-emdash"* ]]; then
+        printf '[commit-msg] Em-dash character is forbidden in commit messages: %s\n' "$line" >&2
+        violations=$((violations + 1))
+    fi
+
+    if [[ "$line" == *"$ROBOT_EMOJI_CHAR"* ]]; then
+        printf '[commit-msg] Robot emoji is forbidden in commit messages: %s\n' "$line" >&2
+        violations=$((violations + 1))
+    fi
+
+    if printf '%s\n' "$line" | grep -Eiq "$COAUTHOR_AI_REGEX" \
+        || printf '%s\n' "$line" | grep -Eiq "$GENERATED_AI_REGEX" \
+        || printf '%s\n' "$line" | grep -Eiq "$MACHINE_WRITTEN_REGEX" \
+        || printf '%s\n' "$line" | grep -Eiq "$AUTHORED_AI_REGEX"; then
+        printf '[commit-msg] AI vendor attribution is forbidden in commit messages: %s\n' "$line" >&2
+        violations=$((violations + 1))
+    fi
+done <<< "$cleaned"
+
+if [ "$violations" -gt 0 ]; then
+    printf '[commit-msg] Rejected commit message (%d violation(s)).\n' "$violations" >&2
+    exit 1
+fi

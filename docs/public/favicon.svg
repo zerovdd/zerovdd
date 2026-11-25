@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="1024" height="1024" viewBox="97 97 806 806"
+     role="img" aria-labelledby="title desc">
+  <title id="title">ZeroVDD app icon</title>
+  <desc id="desc">An off-white and cyan geometric zero, separated by two diagonal cuts, inside a matte obsidian rounded square. The area outside the container is transparent.</desc>
+  <defs>
+    <linearGradient id="obsidian" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#121419"/>
+      <stop offset="0.45" stop-color="#0A0A0A"/>
+      <stop offset="1" stop-color="#0B0C0F"/>
+    </linearGradient>
+    <linearGradient id="top-edge" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#8995A5" stop-opacity="0.36"/>
+      <stop offset="0.14" stop-color="#8995A5" stop-opacity="0.03"/>
+      <stop offset="0.35" stop-color="#8995A5" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect id="container" x="98" y="98" width="804" height="804" rx="168"
+        fill="url(#obsidian)" stroke="url(#top-edge)" stroke-width="1.4"/>
+
+  <!-- Two editable paths; diagonal gaps are empty space, not overlaid strokes. -->
+  <g id="symbol">
+    <path id="zero-off-white" fill="#F4F6F8" d="
+      M 360,280
+      H 647
+      C 680,280 708,290 729,307
+      L 650,386
+      C 640,381 629,378 617,378
+      H 381
+      C 329,378 297,414 297,466
+      V 541
+      C 297,568 305,585 327,599
+      L 250,676
+      C 211,638 192,598 192,545
+      V 450
+      C 192,356 267,280 360,280
+      Z"/>
+    <path id="zero-cyan" fill="#38BDF8" d="
+      M 749,323
+      C 787,361 808,405 808,451
+      V 551
+      C 808,646 733,720 640,720
+      H 360
+      C 326,720 296,710 270,693
+      L 349,614
+      C 360,619 372,621 386,621
+      H 617
+      C 669,621 703,587 703,537
+      V 470
+      C 703,441 693,418 671,401
+      L 749,323
+      Z"/>
+  </g>
+</svg>

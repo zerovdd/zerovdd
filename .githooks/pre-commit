@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# Fast pre-commit gate: rustfmt check on Rust workspaces + blocking em-dash check on staged diff.
+
+set -euo pipefail
+
+EMDASH_CHAR="$(printf '\xe2\x80\x94')"
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# Run rustfmt check when staged Rust files exist in the root or driver-wdk workspace.
+staged_rs="$(git diff --cached --name-only --diff-filter=ACMR -- '*.rs')"
+if [ -n "$staged_rs" ]; then
+    if [ -f "$ROOT/Cargo.toml" ] || [ -f "$ROOT/driver-wdk/Cargo.toml" ]; then
+        if ! command -v cargo >/dev/null 2>&1; then
+            printf '[pre-commit] cargo not found on PATH; cannot check formatting.\n' >&2
+            exit 1
+        fi
+    fi
+
+    if [ -f "$ROOT/Cargo.toml" ]; then
+        if ! cargo fmt --all -- --check; then
+            printf '[pre-commit] Formatting check failed. Run: cargo fmt --all\n' >&2
+            exit 1
+        fi
+    fi
+
+    if [ -f "$ROOT/driver-wdk/Cargo.toml" ]; then
+        if ! cargo fmt --manifest-path "$ROOT/driver-wdk/Cargo.toml" --all -- --check; then
+            printf '[pre-commit] Formatting check failed in driver-wdk. Run: cargo fmt --manifest-path driver-wdk/Cargo.toml --all\n' >&2
+            exit 1
+        fi
+    fi
+fi
+
+# Blocking em-dash check on staged additions outside plans/ and CHANGELOG.md.
+violations=0
+current_file=""
+tmp_diff="$(mktemp)"
+trap 'rm -f "$tmp_diff"' EXIT
+
+git -c diff.noprefix=false -c diff.mnemonicPrefix=false -c core.quotepath=false \
+    diff --cached --no-color --no-ext-diff --unified=0 -- . ':!plans' ':!CHANGELOG.md' >"$tmp_diff"
+
+while IFS= read -r line; do
+    line="${line%$'\r'}"
+    case "$line" in
+        "+++ b/"*)
+            current_file="${line#+++ b/}"
+            continue
+            ;;
+        "+++ /dev/null")
+            current_file=""
+            continue
+            ;;
+        "+++"*|"---"*|"@@"*|"diff --git"*|"index "*)
+            continue
+            ;;
+    esac
+
+    if [ -z "$current_file" ]; then
+        continue
+    fi
+    case "$current_file" in
+        plans/*|*/plans/*|CHANGELOG.md)
+            continue
+            ;;
+    esac
+
+    case "$line" in
+        "+"*)
+            added="${line#+}"
+            if [[ "$added" == *"$EMDASH_CHAR"* ]] && [[ "$added" != *"ok-emdash"* ]]; then
+                printf '[pre-commit] em-dash violation in %s: %s\n' "$current_file" "$added" >&2
+                violations=$((violations + 1))
+            fi
+            ;;
+    esac
+done <"$tmp_diff"
+
+if [ "$violations" -gt 0 ]; then
+    printf '[pre-commit] Blocked commit with %d em-dash violation(s). Add "ok-emdash" on intentional lines.\n' "$violations" >&2
+    exit 1
+fi

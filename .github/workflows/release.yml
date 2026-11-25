@@ -1,0 +1,608 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Optional tag name to validate (e.g. v0.1.0)
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  verify-versions:
+    name: Verify Version Lockstep
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version_check.outputs.version }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check version lockstep across Cargo, INF, MSI, and tag
+        id: version_check
+        shell: bash
+        env:
+          TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG_VALUE="$TAG_INPUT"
+          if [ -z "$TAG_VALUE" ] && [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG_VALUE="${GITHUB_REF#refs/tags/}"
+          fi
+          if [ -n "$TAG_VALUE" ]; then
+            bash scripts/check-versions.sh --tag "$TAG_VALUE"
+          else
+            bash scripts/check-versions.sh
+          fi
+          PKG_VERSION="$(awk '
+            /^\[workspace\.package\]/ { in_sec = 1; next }
+            /^\[/ { in_sec = 0; next }
+            in_sec && /^[[:space:]]*version[[:space:]]*=[[:space:]]*"[^"]+"/ {
+              line = $0
+              sub(/^[^"]*"/, "", line)
+              sub(/".*$/, "", line)
+              print line
+              exit
+            }
+          ' Cargo.toml)"
+          echo "version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build Release Artifacts (${{ matrix.arch }})
+    needs: verify-versions
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+            wix_arch: x64
+          - arch: ARM64
+            target: aarch64-pc-windows-msvc
+            wix_arch: arm64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pinned Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.100.0"
+          targets: ${{ matrix.target }}
+          cache-key: "release-${{ matrix.arch }}"
+
+      - name: Install WiX v5 CLI
+        shell: pwsh
+        run: |
+          $dotnetTools = Join-Path $env:USERPROFILE ".dotnet\tools"
+          if (-not (($env:PATH -split ";") -contains $dotnetTools)) {
+            $env:PATH = "$dotnetTools;$env:PATH"
+          }
+          $dotnetTools | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          if (-not (Get-Command wix.exe -ErrorAction SilentlyContinue)) {
+            dotnet tool install --global wix --version 5.0.2
+          }
+          wix.exe --version
+
+      - name: Build release workspace binaries
+        shell: pwsh
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+
+      - name: Build unsigned WDK driver package (InfVerif + ApiValidator + Inf2Cat)
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-driver.ps1 -Arch $env:BUILD_ARCH -Profile release -SkipSign
+
+      - name: Upload clean unsigned driver package for Partner Center CAB
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: driver-raw-${{ matrix.arch }}
+          path: dist/${{ matrix.arch }}/
+
+      - name: Stage binaries and driver DLL for SignPath
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          $stageDir = "signpath-in/binaries-$env:BUILD_ARCH"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          Copy-Item "target/$env:BUILD_TARGET/release/zerovdd.exe" (Join-Path $stageDir "zerovdd.exe") -Force
+          Copy-Item "target/$env:BUILD_TARGET/release/zerovdd-svc.exe" (Join-Path $stageDir "zerovdd-svc.exe") -Force
+          Copy-Item "target/$env:BUILD_TARGET/release/zerovdd-tray.exe" (Join-Path $stageDir "zerovdd-tray.exe") -Force
+          Copy-Item "dist/$env:BUILD_ARCH/zerovdd.dll" (Join-Path $stageDir "zerovdd.dll") -Force
+
+      - name: Upload binaries and driver DLL for SignPath
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        id: upload_signpath_binaries
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signpath-binaries-${{ matrix.arch }}
+          path: signpath-in/binaries-${{ matrix.arch }}/
+          retention-days: 1
+
+      - name: Sign binaries and driver DLL via SignPath Foundation
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'zerovdd' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_BINARIES_ARTIFACT_SLUG || 'zerovdd-binaries' }}
+          github-artifact-id: ${{ steps.upload_signpath_binaries.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signpath-out/binaries-${{ matrix.arch }}
+
+      - name: Install signed binaries, regenerate catalog, and stage catalog for SignPath
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          BUILD_TARGET: ${{ matrix.target }}
+        run: |
+          $outDir = "signpath-out/binaries-$env:BUILD_ARCH"
+          $extractDir = "signpath-extracted/binaries-$env:BUILD_ARCH"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          $zips = Get-ChildItem -Path $outDir -Filter "*.zip" -File -ErrorAction SilentlyContinue
+          if ($zips) {
+            foreach ($zip in $zips) {
+              Expand-Archive -Path $zip.FullName -DestinationPath $extractDir -Force
+            }
+            $searchRoot = $extractDir
+          } else {
+            $searchRoot = $outDir
+          }
+
+          function Resolve-SignedFile {
+            param([string]$Root, [string]$FileName)
+            $found = Get-ChildItem -Path $Root -Recurse -Filter $FileName -File | Select-Object -First 1
+            if (-not $found) {
+              throw "Missing signed file '$FileName' in '$Root'"
+            }
+            $sig = Get-AuthenticodeSignature -FilePath $found.FullName
+            if ($sig.Status -ne 'Valid') {
+              throw "Signature validation failed for '$($found.FullName)': $($sig.Status)"
+            }
+            return $found.FullName
+          }
+
+          Copy-Item (Resolve-SignedFile -Root $searchRoot -FileName "zerovdd.exe") "target/$env:BUILD_TARGET/release/zerovdd.exe" -Force
+          Copy-Item (Resolve-SignedFile -Root $searchRoot -FileName "zerovdd-svc.exe") "target/$env:BUILD_TARGET/release/zerovdd-svc.exe" -Force
+          Copy-Item (Resolve-SignedFile -Root $searchRoot -FileName "zerovdd-tray.exe") "target/$env:BUILD_TARGET/release/zerovdd-tray.exe" -Force
+          Copy-Item (Resolve-SignedFile -Root $searchRoot -FileName "zerovdd.dll") "dist/$env:BUILD_ARCH/zerovdd.dll" -Force
+
+          $kitRoots = @($env:WDKContentRoot, (Join-Path $env:LOCALAPPDATA "zerovdd-wdk\kit"), "C:\Program Files (x86)\Windows Kits\10") |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) }
+          $inf2Cat = ($kitRoots | ForEach-Object { Get-ChildItem (Join-Path $_ "bin\*\x86\Inf2Cat.exe") -ErrorAction SilentlyContinue } |
+            Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $inf2Cat) {
+            $cmd = Get-Command "Inf2Cat.exe" -ErrorAction SilentlyContinue
+            if ($cmd) { $inf2Cat = $cmd.Source }
+          }
+          if (-not $inf2Cat) {
+            throw "Inf2Cat.exe not found in WDK/SDK paths or PATH"
+          }
+          $inf2CatOs = if ($env:BUILD_ARCH -eq "x64") { "10_NI_X64,10_GE_X64" } else { "10_NI_ARM64,10_GE_ARM64" }
+          & $inf2Cat /driver:"dist/$env:BUILD_ARCH" /os:$inf2CatOs
+          if ($LASTEXITCODE -ne 0) {
+            throw "Inf2Cat.exe failed after SignPath DLL signing with exit code $LASTEXITCODE"
+          }
+
+          $catStage = "signpath-in/catalog-$env:BUILD_ARCH"
+          New-Item -ItemType Directory -Force -Path $catStage | Out-Null
+          Copy-Item "dist/$env:BUILD_ARCH/zerovdd.cat" (Join-Path $catStage "zerovdd.cat") -Force
+
+      - name: Upload driver catalog for SignPath
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        id: upload_signpath_catalog
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signpath-catalog-${{ matrix.arch }}
+          path: signpath-in/catalog-${{ matrix.arch }}/
+          retention-days: 1
+
+      - name: Sign driver catalog via SignPath Foundation
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'zerovdd' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_CATALOG_ARTIFACT_SLUG || 'zerovdd-catalog' }}
+          github-artifact-id: ${{ steps.upload_signpath_catalog.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signpath-out/catalog-${{ matrix.arch }}
+
+      - name: Install and verify signed driver catalog
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          $outDir = "signpath-out/catalog-$env:BUILD_ARCH"
+          $extractDir = "signpath-extracted/catalog-$env:BUILD_ARCH"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          $zips = Get-ChildItem -Path $outDir -Filter "*.zip" -File -ErrorAction SilentlyContinue
+          if ($zips) {
+            foreach ($zip in $zips) {
+              Expand-Archive -Path $zip.FullName -DestinationPath $extractDir -Force
+            }
+            $searchRoot = $extractDir
+          } else {
+            $searchRoot = $outDir
+          }
+          $catFile = Get-ChildItem -Path $searchRoot -Recurse -Filter "zerovdd.cat" -File | Select-Object -First 1
+          if (-not $catFile) {
+            throw "Missing signed zerovdd.cat in '$searchRoot'"
+          }
+          $sig = Get-AuthenticodeSignature -FilePath $catFile.FullName
+          if ($sig.Status -ne 'Valid') {
+            throw "Signature validation failed for '$($catFile.FullName)': $($sig.Status)"
+          }
+          Copy-Item $catFile.FullName "dist/$env:BUILD_ARCH/zerovdd.cat" -Force
+
+      - name: Sign binaries, driver DLL, and catalog when Authenticode secret is configured
+        if: "!(vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v'))"
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          BUILD_TARGET: ${{ matrix.target }}
+          SIGN_PFX_B64: ${{ secrets.WINDOWS_SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASS: ${{ secrets.WINDOWS_SIGN_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGN_PFX_B64)) {
+            Write-Host "WINDOWS_SIGN_PFX_BASE64 not configured; skipping Authenticode signing for binaries and driver."
+            exit 0
+          }
+          $kitRoots = @($env:WDKContentRoot, (Join-Path $env:LOCALAPPDATA "zerovdd-wdk\kit"), "C:\Program Files (x86)\Windows Kits\10") |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) }
+          $signTool = ($kitRoots | ForEach-Object { Get-ChildItem (Join-Path $_ "bin\*\x64\signtool.exe") -ErrorAction SilentlyContinue } |
+            Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $signTool) {
+            $cmd = Get-Command "signtool.exe" -ErrorAction SilentlyContinue
+            if ($cmd) { $signTool = $cmd.Source }
+          }
+          if (-not $signTool) {
+            throw "signtool.exe not found in WDK/SDK paths or PATH"
+          }
+          $inf2Cat = ($kitRoots | ForEach-Object { Get-ChildItem (Join-Path $_ "bin\*\x86\Inf2Cat.exe") -ErrorAction SilentlyContinue } |
+            Sort-Object FullName -Descending | Select-Object -First 1).FullName
+          if (-not $inf2Cat) {
+            $cmd = Get-Command "Inf2Cat.exe" -ErrorAction SilentlyContinue
+            if ($cmd) { $inf2Cat = $cmd.Source }
+          }
+          if (-not $inf2Cat) {
+            throw "Inf2Cat.exe not found in WDK/SDK paths or PATH"
+          }
+          $inf2CatOs = if ($env:BUILD_ARCH -eq "x64") { "10_NI_X64,10_GE_X64" } else { "10_NI_ARM64,10_GE_ARM64" }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "release-sign.pfx"
+          try {
+            [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:SIGN_PFX_B64))
+            foreach ($bin in @(
+              "target/$env:BUILD_TARGET/release/zerovdd.exe",
+              "target/$env:BUILD_TARGET/release/zerovdd-svc.exe",
+              "target/$env:BUILD_TARGET/release/zerovdd-tray.exe",
+              "dist/$env:BUILD_ARCH/zerovdd.dll"
+            )) {
+              $signArgs = @("sign", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "/f", $pfxPath)
+              if (-not [string]::IsNullOrWhiteSpace($env:SIGN_PFX_PASS)) {
+                $signArgs += @("/p", $env:SIGN_PFX_PASS)
+              }
+              $signArgs += $bin
+              & $signTool @signArgs
+              if ($LASTEXITCODE -ne 0) {
+                throw "signtool.exe failed for $bin with exit code $LASTEXITCODE"
+              }
+            }
+
+            & $inf2Cat /driver:"dist/$env:BUILD_ARCH" /os:$inf2CatOs
+            if ($LASTEXITCODE -ne 0) {
+              throw "Inf2Cat.exe failed after DLL signing with exit code $LASTEXITCODE"
+            }
+
+            $catSignArgs = @("sign", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "/f", $pfxPath)
+            if (-not [string]::IsNullOrWhiteSpace($env:SIGN_PFX_PASS)) {
+              $catSignArgs += @("/p", $env:SIGN_PFX_PASS)
+            }
+            $catSignArgs += "dist/$env:BUILD_ARCH/zerovdd.cat"
+            & $signTool @catSignArgs
+            if ($LASTEXITCODE -ne 0) {
+              throw "signtool.exe failed for zerovdd.cat with exit code $LASTEXITCODE"
+            }
+          }
+          finally {
+            Remove-Item -Path $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Build WiX v5 MSI installer
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          BUILD_TARGET: ${{ matrix.target }}
+          WIX_ARCH: ${{ matrix.wix_arch }}
+          PKG_VERSION: ${{ needs.verify-versions.outputs.version }}
+          SIGNPATH_ACTIVE: ${{ vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v') }}
+          SIGN_PFX_B64: ${{ secrets.WINDOWS_SIGN_PFX_BASE64 }}
+          SIGN_PFX_PASS: ${{ secrets.WINDOWS_SIGN_PFX_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "release-out" | Out-Null
+          $msiPath = "release-out/zerovdd-$env:PKG_VERSION-$env:BUILD_ARCH.msi"
+          wix.exe build installer/zerovdd.wxs `
+            -arch $env:WIX_ARCH `
+            -d BinDir="target/$env:BUILD_TARGET/release" `
+            -d DriverDir="dist/$env:BUILD_ARCH" `
+            -o $msiPath
+          if ($LASTEXITCODE -ne 0) {
+            throw "wix.exe build failed with exit code $LASTEXITCODE"
+          }
+          if ($env:SIGNPATH_ACTIVE -ne 'true' -and -not [string]::IsNullOrWhiteSpace($env:SIGN_PFX_B64)) {
+            $kitRoots = @($env:WDKContentRoot, (Join-Path $env:LOCALAPPDATA "zerovdd-wdk\kit"), "C:\Program Files (x86)\Windows Kits\10") |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and (Test-Path $_) }
+            $signTool = ($kitRoots | ForEach-Object { Get-ChildItem (Join-Path $_ "bin\*\x64\signtool.exe") -ErrorAction SilentlyContinue } |
+              Sort-Object FullName -Descending | Select-Object -First 1).FullName
+            if (-not $signTool) {
+              $cmd = Get-Command "signtool.exe" -ErrorAction SilentlyContinue
+              if ($cmd) { $signTool = $cmd.Source }
+            }
+            if (-not $signTool) {
+              throw "signtool.exe not found in WDK/SDK paths or PATH"
+            }
+            $pfxPath = Join-Path $env:RUNNER_TEMP "release-msi-sign.pfx"
+            try {
+              [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:SIGN_PFX_B64))
+              $signArgs = @("sign", "/fd", "SHA256", "/tr", "http://timestamp.digicert.com", "/td", "SHA256", "/f", $pfxPath)
+              if (-not [string]::IsNullOrWhiteSpace($env:SIGN_PFX_PASS)) {
+                $signArgs += @("/p", $env:SIGN_PFX_PASS)
+              }
+              $signArgs += $msiPath
+              & $signTool @signArgs
+              if ($LASTEXITCODE -ne 0) {
+                throw "signtool.exe failed for $msiPath with exit code $LASTEXITCODE"
+              }
+            }
+            finally {
+              Remove-Item -Path $pfxPath -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+      - name: Stage MSI installer for SignPath
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          PKG_VERSION: ${{ needs.verify-versions.outputs.version }}
+        run: |
+          $stageDir = "signpath-in/msi-$env:BUILD_ARCH"
+          New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
+          $msiName = "zerovdd-$env:PKG_VERSION-$env:BUILD_ARCH.msi"
+          Copy-Item (Join-Path "release-out" $msiName) (Join-Path $stageDir $msiName) -Force
+
+      - name: Upload MSI installer for SignPath
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        id: upload_signpath_msi
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: signpath-msi-${{ matrix.arch }}
+          path: signpath-in/msi-${{ matrix.arch }}/
+          retention-days: 1
+
+      - name: Sign MSI installer via SignPath Foundation
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        uses: signpath/github-action-submit-signing-request@a2c5b60d9c75f073142b653c354b632eedce097b # v3.2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG || 'zerovdd' }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_MSI_ARTIFACT_SLUG || 'zerovdd-msi' }}
+          github-artifact-id: ${{ steps.upload_signpath_msi.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signpath-out/msi-${{ matrix.arch }}
+
+      - name: Install and verify signed MSI installer
+        if: vars.SIGNPATH_ENABLED == 'true' && startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          PKG_VERSION: ${{ needs.verify-versions.outputs.version }}
+        run: |
+          $outDir = "signpath-out/msi-$env:BUILD_ARCH"
+          $extractDir = "signpath-extracted/msi-$env:BUILD_ARCH"
+          New-Item -ItemType Directory -Force -Path $extractDir | Out-Null
+          $zips = Get-ChildItem -Path $outDir -Filter "*.zip" -File -ErrorAction SilentlyContinue
+          if ($zips) {
+            foreach ($zip in $zips) {
+              Expand-Archive -Path $zip.FullName -DestinationPath $extractDir -Force
+            }
+            $searchRoot = $extractDir
+          } else {
+            $searchRoot = $outDir
+          }
+          $msiName = "zerovdd-$env:PKG_VERSION-$env:BUILD_ARCH.msi"
+          $signedMsi = Get-ChildItem -Path $searchRoot -Recurse -Filter $msiName -File | Select-Object -First 1
+          if (-not $signedMsi) {
+            throw "Missing signed $msiName in '$searchRoot'"
+          }
+          $sig = Get-AuthenticodeSignature -FilePath $signedMsi.FullName
+          if ($sig.Status -ne 'Valid') {
+            throw "Signature validation failed for '$($signedMsi.FullName)': $($sig.Status)"
+          }
+          Copy-Item $signedMsi.FullName (Join-Path "release-out" $msiName) -Force
+
+      - name: Generate CycloneDX SBOM and package release artifacts
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+          BUILD_TARGET: ${{ matrix.target }}
+          PKG_VERSION: ${{ needs.verify-versions.outputs.version }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "release-out" | Out-Null
+
+          $zipStageDir = "zip-stage/$env:BUILD_ARCH"
+          $zipDriverDir = Join-Path $zipStageDir "driver"
+          New-Item -ItemType Directory -Force -Path $zipDriverDir | Out-Null
+          Copy-Item "target/$env:BUILD_TARGET/release/zerovdd.exe" (Join-Path $zipStageDir "zerovdd.exe") -Force
+          Copy-Item "target/$env:BUILD_TARGET/release/zerovdd-tray.exe" (Join-Path $zipStageDir "zerovdd-tray.exe") -Force
+          Copy-Item "dist/$env:BUILD_ARCH/*" $zipDriverDir -Force
+          $zipPath = "release-out/zerovdd-$env:PKG_VERSION-$env:BUILD_ARCH.zip"
+          Compress-Archive -Path "$zipStageDir/*" -DestinationPath $zipPath -Force
+
+          cargo install --locked cargo-cyclonedx --version 0.5.10
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo install cargo-cyclonedx failed with exit code $LASTEXITCODE"
+          }
+
+          $sbomTag = "sbom-$env:BUILD_ARCH"
+          cargo cyclonedx --format json --target $env:BUILD_TARGET --override-filename $sbomTag
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo cyclonedx (workspace) failed with exit code $LASTEXITCODE"
+          }
+          Copy-Item "crates/zerovdd-cli/$sbomTag.json" "release-out/sbom-$env:BUILD_ARCH.cdx.json" -Force
+          Copy-Item "crates/zerovdd-svc/$sbomTag.json" "release-out/sbom-svc-$env:BUILD_ARCH.cdx.json" -Force
+          Copy-Item "crates/zerovdd-tray/$sbomTag.json" "release-out/sbom-tray-$env:BUILD_ARCH.cdx.json" -Force
+          Get-ChildItem -Path "crates" -Recurse -Filter "$sbomTag.json" | Remove-Item -Force
+
+          $driverSbomTag = "sbom-driver-$env:BUILD_ARCH"
+          cargo cyclonedx --manifest-path "driver-wdk/Cargo.toml" --format json --target $env:BUILD_TARGET --override-filename $driverSbomTag
+          if ($LASTEXITCODE -ne 0) {
+            throw "cargo cyclonedx (driver-wdk) failed with exit code $LASTEXITCODE"
+          }
+          Copy-Item "driver-wdk/zerovdd-driver/$driverSbomTag.json" "release-out/sbom-driver-$env:BUILD_ARCH.cdx.json" -Force
+          Get-ChildItem -Path "driver-wdk" -Recurse -Filter "$driverSbomTag.json" | Remove-Item -Force
+
+          Set-Content -Path "release-out/BUILD_INFO-$env:BUILD_ARCH.txt" -Value @(
+            "version=$env:PKG_VERSION"
+            "arch=$env:BUILD_ARCH"
+            "target=$env:BUILD_TARGET"
+            "commit=$env:GIT_SHA"
+          )
+
+      - name: Upload collision-free release artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-${{ matrix.arch }}
+          path: release-out/
+
+  build-attestation-cab:
+    name: Build Partner Center Attestation CAB
+    needs: [verify-versions, build-windows]
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download x64 driver package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: driver-raw-x64
+          path: dist/x64
+
+      - name: Download ARM64 driver package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: driver-raw-ARM64
+          path: dist/ARM64
+
+      - name: Package and optionally EV-sign Partner Center CAB
+        shell: pwsh
+        env:
+          PKG_VERSION: ${{ needs.verify-versions.outputs.version }}
+          EV_PFX_B64: ${{ secrets.WINDOWS_EV_PFX_BASE64 }}
+          EV_PFX_PASS: ${{ secrets.WINDOWS_EV_PFX_PASSWORD }}
+        run: |
+          New-Item -ItemType Directory -Force -Path "cab-out" | Out-Null
+          $cabArgs = @{
+            DistDir = "dist"
+            OutDir  = "cab-out"
+            Version = $env:PKG_VERSION
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "ev-sign.pfx"
+          try {
+            if (-not [string]::IsNullOrWhiteSpace($env:EV_PFX_B64)) {
+              [System.IO.File]::WriteAllBytes($pfxPath, [System.Convert]::FromBase64String($env:EV_PFX_B64))
+              $cabArgs.PfxPath = $pfxPath
+              if (-not [string]::IsNullOrWhiteSpace($env:EV_PFX_PASS)) {
+                $cabArgs.PfxPassword = $env:EV_PFX_PASS
+              }
+            }
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-attestation-cab.ps1 @cabArgs
+            if ($LASTEXITCODE -ne 0) {
+              throw "build-attestation-cab.ps1 failed with exit code $LASTEXITCODE"
+            }
+          }
+          finally {
+            Remove-Item -Path $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload Partner Center attestation CAB
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: attestation-cab
+          path: cab-out/
+
+  draft-release:
+    name: Assemble Draft GitHub Release
+    needs: [verify-versions, build-windows, build-attestation-cab]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download x64 release artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-x64
+          path: artifacts/release-x64
+
+      - name: Download ARM64 release artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-ARM64
+          path: artifacts/release-ARM64
+
+      - name: Download Partner Center attestation CAB
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: attestation-cab
+          path: artifacts/attestation-cab
+
+      - name: Collect release artifacts and generate SHA-256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-files
+          while IFS= read -r -d '' src; do
+            base="$(basename "$src")"
+            if [ -e "release-files/$base" ]; then
+              printf 'Duplicate release artifact filename detected: %s (from %s)\n' "$base" "$src" >&2
+              exit 1
+            fi
+            cp "$src" "release-files/$base"
+          done < <(find artifacts -type f -print0)
+          (cd release-files && sha256sum * > SHA256SUMS.txt)
+
+      - name: Create Draft GitHub Release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        with:
+          draft: true
+          generate_release_notes: true
+          files: release-files/*

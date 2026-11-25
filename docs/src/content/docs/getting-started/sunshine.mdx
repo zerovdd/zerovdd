@@ -1,0 +1,90 @@
+---
+title: Sunshine Setup
+description: Integrate ZeroVDD with upstream LizardByte Sunshine for dynamic per-client virtual displays, HDR10/24H2 ACM, and crash recovery.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+ZeroVDD integrates directly with **upstream LizardByte Sunshine** with no forks or community wrapper scripts. When a Moonlight client connects, ZeroVDD creates a virtual display matching the client's exact resolution, refresh rate (including fractional `59.94`, `119.88`, and `239.76 Hz`), and HDR setting, then restores your physical monitors automatically when the stream ends or if Sunshine crashes.
+
+## Prerequisites
+
+- ZeroVDD is installed and `zerovdd doctor` reports `zerovdd-svc` running and connected. See [Installation](/getting-started/installation/).
+- Upstream LizardByte Sunshine is installed (default config: `C:\Program Files\Sunshine\config\sunshine.conf`).
+
+## Configure `sunshine.conf`
+
+<Steps>
+1. **Preview edits with a dry run:**
+
+   ```powershell
+   zerovdd sunshine configure
+   ```
+
+   If `sunshine.conf` lives in a non-default location, pass `--config <PATH>` or set `sunshine_config_path` under `[sunshine]` in `%ProgramData%\zerovdd\config.toml`.
+
+2. **Apply edits (and clear pinned `output_name` if warned):**
+
+   ```powershell
+   zerovdd sunshine configure --apply --clear-output-name
+   ```
+
+   Before writing `sunshine.conf`, ZeroVDD saves a timestamped backup next to the file (`sunshine.conf.bak.<epoch>`). Applying makes three idempotent updates:
+   - **`global_prep_cmd`:** Adds a Do/Undo entry calling `"<install-dir>\zerovdd.exe" sunshine start` and `"<install-dir>\zerovdd.exe" sunshine stop` with `"elevated": "false"`. Re-running updates the entry in place without disturbing other prep commands.
+   - **`dd_configuration_option = disabled`:** Disables Sunshine's built-in display switcher so it cannot race with ZeroVDD's CCD topology and HDR transitions.
+   - **`--clear-output-name`:** Removes any pinned physical `output_name` (such as `\\.\DISPLAY1`) so Sunshine captures whichever primary display is active during streaming.
+
+3. **Restart Sunshine:**
+   Restart the Sunshine Windows service or application so the updated `sunshine.conf` takes effect.
+
+4. **Verify status:**
+
+   ```powershell
+   zerovdd sunshine status
+   ```
+</Steps>
+
+## How a Streaming Session Runs
+
+When Moonlight starts a stream, Sunshine runs `zerovdd.exe sunshine start`:
+
+1. Reads Sunshine's client environment variables:
+   - `SUNSHINE_CLIENT_WIDTH` and `SUNSHINE_CLIENT_HEIGHT`
+   - `SUNSHINE_CLIENT_FPS` (integer or fractional Hz, e.g. `59.94`, `90`, `119.88`)
+   - `SUNSHINE_CLIENT_HDR` (`true` / `1` or `false` / `0`)
+   - `SUNSHINE_CLIENT_UUID` (preferred) or `SUNSHINE_CLIENT_NAME` (fallback `"default-sunshine-client"`) to derive a deterministic `MonitorGuid` (`MonitorContainerId`) so Windows remembers per-client display layout across reconnects.
+2. Walks the ancestor process tree to locate `sunshine.exe` and records `(pid, creation_time)`, skipping transient `cmd.exe` wrapper shells.
+3. Sends `StartSession` to `zerovdd-svc` over `\\.\pipe\zerovdd-svc`:
+   - Snapshots current physical layout, modes, primary `(0, 0)` origin, and independent HDR/ACM state to `%ProgramData%\zerovdd\topology-backup.json` (if no session is active yet).
+   - Creates the virtual display with a client-specific EDID 1.4 + CTA-861-G block (or `sunshine.default_edid_path` if configured) sized to realistic ~96-110 PPI.
+   - Runs `zerovdd.exe internal-ccd apply` in the active console session (`Session > 0`) to apply `isolate` or `extend` topology and HDR state.
+
+When Moonlight disconnects, Sunshine invokes `zerovdd.exe sunshine stop`, departing the virtual display and restoring physical monitors from `topology-backup.json`.
+
+## Manual Testing & Overrides
+
+You can test Sunshine sessions from the CLI without connecting Moonlight:
+
+```powershell
+# Inspect active session and service health
+zerovdd sunshine status
+
+# Start a manual test session owned by a specific PID
+zerovdd sunshine start --width 2560 --height 1600 --fps 90 --hdr true --client-id my-tablet --owner-pid <PID>
+
+# Force-stop an active session from a different terminal
+zerovdd sunshine stop --force
+```
+
+## Crash, Lock Screen & Reboot Recovery
+
+- **`sunshine.exe` crash or `taskkill /F`:** `zerovdd-svc` monitors the recorded `sunshine.exe` `(pid, creation_time)` handle. If Sunshine exits without calling `sunshine stop`, `zerovdd-svc` removes the virtual display and restores physical topology from `topology-backup.json` automatically.
+- **Back-to-back client switches:** If a second `StartSession` arrives while an earlier session is active, `zerovdd-svc` preserves the original physical `topology-backup.json` instead of overwriting it with a virtual-only snapshot.
+- **Lock Screen (`Win+L`) & UAC desktop:** Because `zerovdd-svc` launches `internal-ccd` with a session-retargeted `LocalSystem` token into the active console session (`WTSGetActiveConsoleSessionId()`), display switching and restoration work on both `winsta0\default` and `winsta0\winlogon`.
+- **Unexpected reboot / BSOD:** If `topology-backup.json` remains on disk when `zerovdd-svc` starts, it restores physical monitors immediately or as soon as `SERVICE_CONTROL_SESSIONCHANGE` fires `ConsoleConnect`, `SessionLogon`, or `SessionUnlock`.
+
+## What to Read Next
+
+- [Headless Hosts](/guides/headless-hosts/) if your streaming host has no physical monitor connected.
+- [EDID, HDR, and Color](/guides/edid-hdr-and-color/) for Windows 11 24H2 split HDR/ACM behavior and custom EDIDs.
+- [Configuration Reference](/reference/configuration/) to tune `[sunshine]` and `[hdr_defaults]` in `config.toml`.

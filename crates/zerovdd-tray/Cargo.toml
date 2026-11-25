@@ -1,0 +1,44 @@
+[package]
+name = "zerovdd-tray"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "zerovdd-tray"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+ignored = ["windows"]
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+zerovdd-config = { path = "../zerovdd-config" }
+zerovdd-proto = { path = "../zerovdd-proto" }
+serde = { workspace = true, features = ["std"] }
+serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_DataExchange",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Pipes",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }

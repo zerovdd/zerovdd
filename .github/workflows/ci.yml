@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "ci/*"
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust-fast:
+    name: Rust Fast Lane (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup pinned Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.100.0"
+          targets: "x86_64-pc-windows-msvc"
+          cache-key: "linux-fast"
+
+      - name: Install cargo-machete
+        shell: bash
+        run: cargo install --locked cargo-machete
+
+      - name: Run standalone repo lints (fmt, clippy, static lints, script tests, em-dash, drift)
+        shell: bash
+        run: bash scripts/repo-lints.sh
+
+      - name: Run portable workspace tests
+        shell: bash
+        run: cargo test --workspace --quiet
+
+      - name: Check unused dependencies
+        shell: bash
+        run: cargo machete
+
+  windows-wdk:
+    name: Windows WDK & User-Mode (${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            target: x86_64-pc-windows-msvc
+          - arch: ARM64
+            target: aarch64-pc-windows-msvc
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Setup pinned Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.100.0"
+          targets: ${{ matrix.target }}
+          cache-key: "win-${{ matrix.arch }}"
+
+      - name: Check user-mode workspace for ${{ matrix.target }}
+        shell: pwsh
+        run: cargo check --workspace --target ${{ matrix.target }}
+
+      - name: Run native Windows clippy, tests, and machete (x64)
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --target ${{ matrix.target }} -- -D warnings
+          cargo test --workspace --quiet
+          cargo install --locked cargo-machete
+          cargo machete
+
+      - name: Build WDK driver and run InfVerif /u /h + ApiValidator (when driver-wdk is present)
+        shell: pwsh
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: |
+          if (Test-Path "scripts/windows/build-driver.ps1") {
+            pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/windows/build-driver.ps1 -Arch $env:BUILD_ARCH
+          } else {
+            Write-Host "Skipping WDK driver build: scripts/windows/build-driver.ps1 not yet present."
+          }
+
+      - name: Upload driver build artifacts (when generated)
+        if: hashFiles('dist/**') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: driver-${{ matrix.arch }}
+          path: dist/
+          if-no-files-found: ignore

@@ -1,0 +1,73 @@
+---
+title: ZeroVDD
+description: Windows 11 UMDF 2 / IddCx 1.10 Virtual Display Driver, Session-0 service, CLI, and native system tray companion engineered in Rust.
+template: splash
+hero:
+  tagline: Dynamic Windows 11 virtual displays with HDR10, custom EDIDs, fractional refresh rates, and crash-safe Sunshine integration.
+  image:
+    file: ../../assets/logo.svg
+    alt: ZeroVDD geometric display viewport logo
+  actions:
+    - text: Install ZeroVDD
+      link: /getting-started/installation/
+      icon: right-arrow
+      variant: primary
+    - text: Sunshine Setup
+      link: /getting-started/sunshine/
+      icon: laptop
+      variant: secondary
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## Core Capabilities
+
+<CardGrid>
+  <Card title="Dynamic EDID 1.4 & CVT-RBv2" icon="setting">
+    Zero virtual monitors at boot by default. Synthesizes per-client EDID 1.4 + CTA-861-G blocks with configurable PPI, BT.709 / BT.2020 / DCI-P3 gamuts, 8 / 10 / 12 bpc caps, verbatim custom EDID loading, and 64-bit CVT-RBv2 timings up to 8K@240Hz and fractional 59.94 / 119.88 / 239.76 Hz.
+  </Card>
+  <Card title="Session-0 Service & Native Tray" icon="rocket">
+    `zerovdd-svc` runs in Session 0 with an ACL-protected named pipe for Interactive Users and a console-session CCD trampoline that survives UAC prompts, Lock Screen (`Win+L`), `sunshine.exe` crashes, and unexpected reboots. Pair it with the native Win32 `zerovdd-tray.exe` companion.
+  </Card>
+  <Card title="Windows 11 24H2 Split HDR / ACM" icon="sun">
+    Detects OS build via `RtlGetVersion` so Windows 11 24H2+ uses `SET_HDR_STATE` and `SET_WCG_STATE` independently. Enabling HDR on a virtual monitor never flips Auto Color Management (ACM) on your physical monitors.
+  </Card>
+  <Card title="Universal Driver Security" icon="approve-check-circle">
+    `DIRID 13` Driver Store isolation, `InfVerif /u /h /w` and `ApiValidator` Universal clean, `#![no_std]` `NoPanic` driver DLL, and privileged IOCTLs isolated on `\ZeroVddControl` (`SYSTEM` + `Administrators` only) without weakening `Class=Display` access for DXGI or games.
+  </Card>
+</CardGrid>
+
+## Explore the Documentation
+
+<CardGrid>
+  <LinkCard
+    title="New to ZeroVDD?"
+    description="Install via MSI, WinGet, Scoop, or CLI and verify your setup with zerovdd doctor."
+    href="/getting-started/installation/"
+  />
+  <LinkCard
+    title="Streaming with Sunshine & Moonlight?"
+    description="Configure upstream LizardByte Sunshine for automatic per-client display switching and crash recovery."
+    href="/getting-started/sunshine/"
+  />
+  <LinkCard
+    title="Display Layouts, Custom EDIDs & HDR"
+    description="Configure portrait orientation, explicit desktop coordinates, PPI scaling, DCI-P3, bit-depth caps, and raw EDID files."
+    href="/guides/edid-hdr-and-color/"
+  />
+  <LinkCard
+    title="CLI & config.toml Reference"
+    description="Complete command flags, JSON outputs, selector syntax, and strict config.toml schema."
+    href="/reference/cli/"
+  />
+  <LinkCard
+    title="Diagnosing an Issue?"
+    description="Read annotated zerovdd doctor output, capture ETW traces, and resolve common display or HVCI issues."
+    href="/guides/troubleshooting/"
+  />
+  <LinkCard
+    title="Driver & Service Architecture"
+    description="Inspect the acyclic crate graph, Pending-to-Active re-entrancy model, and Session-0 console trampoline."
+    href="/architecture/overview/"
+  />
+</CardGrid>

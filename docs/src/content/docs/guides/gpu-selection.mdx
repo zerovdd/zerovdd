@@ -1,0 +1,71 @@
+---
+title: GPU Selection
+description: Select which DXGI GPU renders ZeroVDD virtual displays, switch render adapters at runtime, and understand TDR recovery and the GPU-switch circuit breaker.
+---
+
+By default, ZeroVDD uses `auto` (`auto_best`), which enumerates DXGI adapters, ignores software fallback adapters such as `Microsoft Basic Render Driver` (WARP), and chooses the hardware GPU with the highest dedicated video memory.
+
+## Inspect Available GPUs
+
+Run `zerovdd doctor` (or `zerovdd doctor --json`) to list every DXGI adapter along with its LUID (`low:high`), VRAM, PCI bus/device/function, and software flag:
+
+```powershell
+zerovdd doctor
+```
+
+## Supported GPU Selector Formats
+
+| Format | Example | Description |
+| :--- | :--- | :--- |
+| `auto` / `auto_best` / `auto-best` | `auto` | Highest-VRAM non-software hardware GPU. |
+| `luid:<low>:<high>` | `luid:0x12341:0` | Exact Windows adapter LUID (decimal or `0x` hex). |
+| `pci:<bus>:<dev>.<fn>` | `pci:47:0.0` | Exact PCI bus, device, and function coordinates. |
+| `<friendly name>` | `"AMD Radeon"` or `"NVIDIA"` | Case-insensitive substring match against DXGI adapter description. |
+
+## Selecting or Switching GPUs via CLI
+
+You can bind a render GPU when adding a display or switch the driver's active render adapter at runtime (both work without elevation when `zerovdd-svc` is running):
+
+```powershell
+# Specify a render GPU when adding a display
+zerovdd display add 2560x1440@120 --gpu "NVIDIA" --extend
+
+# Switch the driver's render adapter at runtime
+zerovdd display switch-gpu luid:0x12341:0
+zerovdd display switch-gpu pci:47:0.0
+zerovdd display switch-gpu auto
+```
+
+You can also switch render GPUs directly from the **Render GPU** submenu in [ZeroVDD Tray](/guides/system-tray/).
+
+## Persistent GPU Configuration (`config.toml`)
+
+Pin your preferred GPU under `[gpu]` in `%ProgramData%\zerovdd\config.toml`:
+
+```toml title="config.toml"
+[gpu]
+mode = "auto_best"
+
+# Alternatives (use one mode block):
+# mode = "luid"
+# low = 74561
+# high = 0
+#
+# mode = "pci_bus"
+# bus = 47
+# device = 0
+# function = 0
+#
+# mode = "friendly_name"
+# name = "AMD Radeon RX 6800"
+```
+
+## GPU Reset (TDR) & Switch Circuit Breaker
+
+- **TDR resilience:** Inside `WUDFHost.exe`, `D3D11DeviceManager` caches `ID3D11Device` handles per adapter LUID, validates `GetDeviceRemovedReason() == S_OK` and `IDXGIFactory1::IsCurrent()` before reuse, and recreates the device cleanly after `Win+Ctrl+Shift+B` or GPU driver resets (`DXGI_ERROR_DEVICE_REMOVED` / `DXGI_ERROR_DEVICE_RESET`).
+- **Circuit breaker:** If an invalid or unavailable render adapter LUID is requested, `zerovdd-engine` bounds retries with a `PendingGpuSwitch` circuit breaker (`max_attempts`) so `AssignSwapChain` never enters an infinite abandon loop. When tripped, `zerovdd doctor` reports `last_gpu_switch_failed: true`; run `zerovdd display switch-gpu auto` to clear it cleanly.
+
+## What to Read Next
+
+- [Driver Internals](/architecture/driver-internals/) for D3D11 device scoping and zero-polling swapchain worker details.
+- [Troubleshooting](/guides/troubleshooting/) for diagnosing GPU reset or `last_gpu_switch_failed` telemetry.

@@ -1,0 +1,39 @@
+# Rust build artifacts
+/target/
+/driver-wdk/target/
+/fuzz/target/
+**/*.rs.bk
+
+# Starlight docs build artifacts
+/docs/node_modules/
+/docs/dist/
+/docs/.astro/
+
+# Local planning notes
+/plans/
+
+# Driver, signing, and packaging build outputs
+*.pdb
+*.cat
+*.cab
+*.msi
+*.wixpdb
+*.etl
+*.pfx
+*.cer
+*.pvk
+/dist/
+/staging/
+
+# Generated changelog scratch output
+/CHANGELOG.cliff.md
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*.swp
+.vscode/
+.idea/
+.env

@@ -1,0 +1,129 @@
+---
+title: Installation
+description: Install, upgrade, or cleanly uninstall ZeroVDD on Windows 11 (x64 or ARM64) using the MSI installer, WinGet, Scoop, or CLI.
+---
+
+import { Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+ZeroVDD ships as a Windows 11 UMDF 2 / IddCx 1.10 driver (`zerovdd.dll`, `zerovdd.inf`, `zerovdd.cat`), a Session-0 Windows service (`zerovdd-svc.exe`), a CLI (`zerovdd.exe`), and a native Win32 system tray companion (`zerovdd-tray.exe`).
+
+## System Requirements
+
+- **OS:** Windows 11 22H2 or newer (OS build `22621`+; `x64` or `ARM64`).
+  - Windows 11 24H2 (OS build `26100`+) additionally enables split HDR and Auto Color Management (ACM / WCG) control.
+- **Privileges:**
+  - **Administrator** privileges are required to install, upgrade, or uninstall the driver (`zerovdd setup`), capture ETW traces (`zerovdd doctor --capture-etw`), or open `\ZeroVddControl` directly in standalone mode.
+  - Once `zerovdd-svc` is running, standard Interactive Users can manage displays, GPUs, and Sunshine sessions over `\\.\pipe\zerovdd-svc` without elevation.
+
+## Install ZeroVDD
+
+<Tabs syncKey="install-method">
+  <TabItem label="MSI Installer (Recommended)">
+    Download `zerovdd-<version>-x64.msi` or `zerovdd-<version>-ARM64.msi` from [GitHub Releases](https://github.com/zerovdd/zerovdd/releases) and run it (or install silently from an elevated prompt):
+
+    ```powershell
+    msiexec /i zerovdd-0.1.0-x64.msi /qn /norestart
+    ```
+
+    The MSI performs four actions atomically:
+    1. Installs `zerovdd.exe`, `zerovdd-svc.exe`, and `zerovdd-tray.exe` under `C:\Program Files\ZeroVDD\` and adds a `ZeroVDD Tray` Start Menu shortcut.
+    2. Adds `C:\Program Files\ZeroVDD\` to the system `PATH`.
+    3. Stages the Universal `DIRID 13` driver package (`zerovdd.inf`, `zerovdd.dll`, `zerovdd.cat`) into the Windows Driver Store and creates the `Root\ZeroVdd` PnP device node.
+    4. Registers and starts the `zerovdd-svc` Windows service.
+  </TabItem>
+  <TabItem label="WinGet">
+    Once published to `microsoft/winget-pkgs`, install the signed per-machine MSI directly via WinGet:
+
+    ```powershell
+    winget install ZeroVDD.ZeroVDD
+    ```
+
+    WinGet invokes the same MSI package (`UpgradeCode` `{E3B14E29-B75E-4BCC-8194-F71147EFD27B}`) and elevates automatically.
+  </TabItem>
+  <TabItem label="Scoop">
+    Scoop installs the portable user-mode archive (`zerovdd.exe`, `zerovdd-tray.exe`, and the `driver\` package directory) using `packaging/scoop/zerovdd.json`:
+
+    ```powershell
+    scoop install zerovdd
+    ```
+
+    Because Scoop runs without elevation, register the UMDF driver afterwards from an **elevated Administrator** prompt:
+
+    ```powershell
+    zerovdd setup install --inf "$(scoop prefix zerovdd)\driver\zerovdd.inf"
+    ```
+
+    For unattended installation including the Session-0 `zerovdd-svc` service, prefer the MSI or WinGet.
+  </TabItem>
+  <TabItem label="CLI Setup (Local / Zip)">
+    From an **elevated Administrator** PowerShell prompt inside an extracted archive or local build tree:
+
+    ```powershell
+    zerovdd setup install
+    ```
+
+    By default, `zerovdd setup install` searches adjacent directories and `dist\<arch>\zerovdd.inf`. Supply an explicit path with `--inf`:
+
+    ```powershell
+    zerovdd setup install --inf C:\path\to\zerovdd.inf
+    ```
+  </TabItem>
+</Tabs>
+
+## Installing a Local Test-Signed Build
+
+For local development builds signed by `scripts/windows/sign-dev.ps1`, `zerovdd setup install` refuses to trust arbitrary certificates unless you pass both `--dev-cert` and its pinned 64-character SHA-256 thumbprint via `--expected-sha256`:
+
+```powershell
+$sha256 = (Get-FileHash .\dist\dev-cert\zerovdd-dev.cer -Algorithm SHA256).Hash
+
+zerovdd setup install `
+  --inf .\dist\x64\zerovdd.inf `
+  --dev-cert .\dist\dev-cert\zerovdd-dev.cer `
+  --expected-sha256 $sha256
+```
+
+`zerovdd setup install` verifies the SHA-256 digest before importing the certificate into `LocalMachine\Root` and `LocalMachine\TrustedPublisher`, and records it in `%ProgramData%\zerovdd\install-state.json` so `zerovdd setup uninstall` removes it later.
+
+:::caution[Windows 11 Memory Integrity (HVCI)]
+On systems with Memory Integrity (HVCI) enabled and `testsigning` off, PnP Driver Store staging succeeds with `--dev-cert`, but `WUDFHost.exe` rejects self-signed driver DLLs (Device Manager Code `31`, `CodeIntegrity` Event `3004`). Loading a local self-signed build live requires `bcdedit /set testsigning on` (with UEFI Secure Boot disabled, such as in a dev VM) or a SignPath Foundation / Partner Center signed release. See [Signing and Release](/release/signing-and-release/).
+:::
+
+## Verify the Installation
+
+Run `zerovdd setup status` and `zerovdd doctor` to confirm Driver Store isolation (`DIRID 13`), `Root\ZeroVdd` health, GPU discovery, and `zerovdd-svc` connectivity:
+
+```powershell
+zerovdd setup status
+zerovdd doctor
+```
+
+Pass `--json` to any `setup`, `display`, `edid`, `doctor`, or `sunshine` command for machine-readable JSON output.
+
+## Upgrading & Clean Uninstall
+
+<Steps>
+1. **Upgrade via MSI or CLI:**
+   Run the newer `.msi` (Windows Installer executes a Major Upgrade in place) or run from an elevated prompt:
+
+   ```powershell
+   zerovdd setup upgrade --inf C:\path\to\zerovdd.inf
+   ```
+
+   `setup upgrade` stops `zerovdd-svc` gracefully (restoring any backed-up physical display topology first) and updates the Driver Store package without duplicating `Root\ZeroVdd`.
+
+2. **Clean Uninstall:**
+   Uninstall `ZeroVDD Virtual Display Driver` from Windows Settings (**Apps -> Installed apps**), run `msiexec /x <msi-or-product-code> /qn`, or run from an elevated prompt:
+
+   ```powershell
+   zerovdd setup uninstall
+   ```
+
+   Uninstalling stops `zerovdd-svc`, removes all `Root\ZeroVdd` device nodes, deletes staged `oem*.inf` packages from the Driver Store, and removes any tracked development certificates from `%ProgramData%\zerovdd\install-state.json`.
+</Steps>
+
+## What to Read Next
+
+- [Quickstart](/getting-started/quickstart/) to add your first virtual display and launch the tray companion.
+- [Sunshine Setup](/getting-started/sunshine/) to integrate with upstream LizardByte Sunshine and Moonlight.
+- [Troubleshooting](/guides/troubleshooting/) if `zerovdd doctor` reports Code `31` or access issues.

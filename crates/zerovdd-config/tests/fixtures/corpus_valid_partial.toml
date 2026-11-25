@@ -1,0 +1,12 @@
+schema_version = 1
+headless_standby = true
+
+[gpu]
+mode = "auto_best"
+
+[[persistent_displays]]
+name = "Desk-4K"
+width = 3840
+height = 2160
+refresh_mhz = 59940
+hdr = true

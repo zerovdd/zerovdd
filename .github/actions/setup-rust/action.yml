@@ -1,0 +1,35 @@
+name: Setup Rust
+description: Installs the pinned Rust toolchain and configures Cargo caching.
+
+inputs:
+  toolchain:
+    description: Exact Rust toolchain channel (must match rust-toolchain.toml)
+    required: false
+    default: "1.100.0"
+  components:
+    description: Comma-separated rustup components to install
+    required: false
+    default: "rustfmt, clippy"
+  targets:
+    description: Comma-separated rustup targets to install
+    required: false
+    default: "x86_64-pc-windows-msvc"
+  cache-key:
+    description: Optional rust-cache key suffix
+    required: false
+    default: "default"
+
+runs:
+  using: composite
+  steps:
+    - name: Install pinned Rust toolchain
+      uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+        targets: ${{ inputs.targets }}
+
+    - name: Configure Cargo cache
+      uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      with:
+        key: ${{ inputs.cache-key }}

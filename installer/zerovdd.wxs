@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <?ifndef Version?>
+    <?define Version = "0.1.0" ?>
+  <?endif?>
+  <?ifndef BinDir?>
+    <?define BinDir = "..\target\release" ?>
+  <?endif?>
+  <?ifndef DriverDir?>
+    <?define DriverDir = "..\dist\x64" ?>
+  <?endif?>
+
+  <Package Name="ZeroVDD Virtual Display Driver"
+           Manufacturer="ZeroVDD Contributors"
+           Version="$(var.Version)"
+           UpgradeCode="{E3B14E29-B75E-4BCC-8194-F71147EFD27B}"
+           Scope="perMachine"
+           InstallerVersion="500">
+    <SummaryInformation Description="ZeroVDD Virtual Display Driver, service, and CLI"
+                        Manufacturer="ZeroVDD Contributors" />
+
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of [ProductName] is already installed."
+                  Schedule="afterInstallInitialize" />
+
+    <MediaTemplate EmbedCab="yes" />
+
+    <Icon Id="ZeroVddIcon.ico" SourceFile="$(sys.SOURCEFILEDIR)..\crates\zerovdd-tray\assets\zerovdd.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ZeroVddIcon.ico" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="ZeroVDD">
+        <Directory Id="DRIVERFOLDER" Name="driver" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuZeroVddFolder" Name="ZeroVDD" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="ProductComponents" Directory="INSTALLFOLDER">
+      <Component Id="ZeroVddCliComponent">
+        <File Id="ZeroVddCliExe" Source="$(var.BinDir)\zerovdd.exe" KeyPath="yes" />
+      </Component>
+
+      <Component Id="ZeroVddSvcComponent">
+        <File Id="ZeroVddSvcExe" Source="$(var.BinDir)\zerovdd-svc.exe" KeyPath="yes" />
+        <ServiceInstall Id="ZeroVddSvcInstall"
+                        Name="zerovdd-svc"
+                        DisplayName="ZeroVDD Virtual Display Service"
+                        Description="Manages virtual display persistence, session recovery, and Sunshine IPC for zerovdd."
+                        Type="ownProcess"
+                        Start="auto"
+                        Account="LocalSystem"
+                        ErrorControl="normal"
+                        Vital="yes" />
+        <ServiceControl Id="ZeroVddSvcControl"
+                        Name="zerovdd-svc"
+                        Start="install"
+                        Stop="both"
+                        Remove="uninstall"
+                        Wait="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="DriverComponents" Directory="DRIVERFOLDER">
+      <Component Id="ZeroVddDriverInfComponent">
+        <File Id="ZeroVddInf" Source="$(var.DriverDir)\zerovdd.inf" KeyPath="yes" />
+      </Component>
+      <Component Id="ZeroVddDriverDllComponent">
+        <File Id="ZeroVddDll" Source="$(var.DriverDir)\zerovdd.dll" KeyPath="yes" />
+      </Component>
+      <Component Id="ZeroVddDriverCatComponent">
+        <File Id="ZeroVddCat" Source="$(var.DriverDir)\zerovdd.cat" KeyPath="yes" />
+      </Component>
+      <?ifdef DevCertPath?>
+      <Component Id="ZeroVddDevCertComponent">
+        <File Id="ZeroVddDevCert" Source="$(var.DevCertPath)" Name="zerovdd-dev.cer" KeyPath="yes" />
+      </Component>
+      <?endif?>
+    </ComponentGroup>
+
+    <ComponentGroup Id="PathComponents" Directory="INSTALLFOLDER">
+      <Component Id="ZeroVddPathComponent" Guid="{17FD199D-0101-4BE6-B068-E55741A4FAA0}">
+        <RegistryValue Root="HKLM"
+                       Key="Software\ZeroVDD"
+                       Name="PathConfigured"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+        <Environment Id="ZeroVddPath"
+                     Name="PATH"
+                     Value="[INSTALLFOLDER]"
+                     Permanent="no"
+                     Part="last"
+                     Action="set"
+                     System="yes" />
+      </Component>
+    </ComponentGroup>
+
+    <ComponentGroup Id="TrayComponents" Directory="INSTALLFOLDER">
+      <Component Id="ZeroVddTrayComponent" Guid="{38EF0C10-93B6-4CF7-9DF1-FE2D766CFDCD}">
+        <File Id="ZeroVddTrayExe" Source="$(var.BinDir)\zerovdd-tray.exe" KeyPath="yes" />
+        <Shortcut Id="ZeroVddTrayStartMenuShortcut"
+                  Directory="ProgramMenuZeroVddFolder"
+                  Name="ZeroVDD Tray"
+                  Description="ZeroVDD system tray companion"
+                  Target="[INSTALLFOLDER]zerovdd-tray.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+        <RemoveFolder Id="RemoveProgramMenuZeroVddFolder"
+                      Directory="ProgramMenuZeroVddFolder"
+                      On="uninstall" />
+      </Component>
+    </ComponentGroup>
+
+    <Feature Id="MainFeature" Title="ZeroVDD Virtual Display Driver" Level="1">
+      <ComponentGroupRef Id="ProductComponents" />
+      <ComponentGroupRef Id="DriverComponents" />
+      <Feature Id="PathFeature" Title="Add zerovdd to System PATH" Level="1">
+        <ComponentGroupRef Id="PathComponents" />
+      </Feature>
+      <Feature Id="TrayFeature" Title="System Tray Companion" Level="1">
+        <ComponentGroupRef Id="TrayComponents" />
+      </Feature>
+    </Feature>
+
+    <?ifdef DevCertPath?>
+    <CustomAction Id="InstallDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup install --inf "[DRIVERFOLDER]zerovdd.inf" --dev-cert "[DRIVERFOLDER]zerovdd-dev.cer" --expected-sha256 "$(var.DevCertSha256)"'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+    <CustomAction Id="UpgradeDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup upgrade --inf "[DRIVERFOLDER]zerovdd.inf" --dev-cert "[DRIVERFOLDER]zerovdd-dev.cer" --expected-sha256 "$(var.DevCertSha256)"'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+    <CustomAction Id="RollbackUpgradeDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup install --inf "[DRIVERFOLDER]zerovdd.inf" --dev-cert "[DRIVERFOLDER]zerovdd-dev.cer" --expected-sha256 "$(var.DevCertSha256)"'
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore" />
+    <CustomAction Id="RollbackUninstallDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup install --inf "[DRIVERFOLDER]zerovdd.inf" --dev-cert "[DRIVERFOLDER]zerovdd-dev.cer" --expected-sha256 "$(var.DevCertSha256)"'
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore" />
+    <?else?>
+    <CustomAction Id="InstallDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup install --inf "[DRIVERFOLDER]zerovdd.inf"'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+    <CustomAction Id="UpgradeDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup upgrade --inf "[DRIVERFOLDER]zerovdd.inf"'
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+    <CustomAction Id="RollbackUpgradeDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup install --inf "[DRIVERFOLDER]zerovdd.inf"'
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore" />
+    <CustomAction Id="RollbackUninstallDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand='setup install --inf "[DRIVERFOLDER]zerovdd.inf"'
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore" />
+    <?endif?>
+
+    <CustomAction Id="RollbackInstallDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand="setup uninstall"
+                  Execute="rollback"
+                  Impersonate="no"
+                  Return="ignore" />
+
+    <CustomAction Id="UninstallDriver"
+                  FileRef="ZeroVddCliExe"
+                  ExeCommand="setup uninstall"
+                  Execute="deferred"
+                  Impersonate="no"
+                  Return="check" />
+
+    <InstallExecuteSequence>
+      <Custom Action="RollbackUninstallDriver"
+              Before="UninstallDriver"
+              Condition='REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+      <Custom Action="UninstallDriver"
+              Before="RemoveFiles"
+              Condition='REMOVE="ALL" AND NOT UPGRADINGPRODUCTCODE' />
+      <Custom Action="RollbackInstallDriver"
+              After="InstallFiles"
+              Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
+      <Custom Action="InstallDriver"
+              After="RollbackInstallDriver"
+              Condition="NOT Installed AND NOT WIX_UPGRADE_DETECTED" />
+      <Custom Action="RollbackUpgradeDriver"
+              After="InstallDriver"
+              Condition="WIX_UPGRADE_DETECTED" />
+      <Custom Action="UpgradeDriver"
+              After="RollbackUpgradeDriver"
+              Condition="WIX_UPGRADE_DETECTED" />
+    </InstallExecuteSequence>
+  </Package>
+</Wix>

@@ -1,0 +1,24 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.9.0.schema.json
+PackageIdentifier: ZeroVDD.ZeroVDD
+PackageVersion: 0.1.0
+InstallerType: msi
+Scope: machine
+UpgradeBehavior: install
+ElevationRequirement: elevatesSelf
+ProductCode: "{REPLACE-WITH-MSI-PRODUCT-CODE}"
+AppsAndFeaturesEntries:
+  - DisplayName: ZeroVDD Virtual Display Driver
+    Publisher: ZeroVDD Contributors
+    ProductCode: "{REPLACE-WITH-MSI-PRODUCT-CODE}"
+    UpgradeCode: "{E3B14E29-B75E-4BCC-8194-F71147EFD27B}"
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/zerovdd/zerovdd/releases/download/v0.1.0/zerovdd-0.1.0-x64.msi
+    InstallerSha256: REPLACE_WITH_X64_MSI_SHA256
+    ProductCode: "{REPLACE-WITH-X64-MSI-PRODUCT-CODE}"
+  - Architecture: arm64
+    InstallerUrl: https://github.com/zerovdd/zerovdd/releases/download/v0.1.0/zerovdd-0.1.0-ARM64.msi
+    InstallerSha256: REPLACE_WITH_ARM64_MSI_SHA256
+    ProductCode: "{REPLACE-WITH-ARM64-MSI-PRODUCT-CODE}"
+ManifestType: installer
+ManifestVersion: 1.9.0

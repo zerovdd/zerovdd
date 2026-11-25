@@ -1,0 +1,44 @@
+{
+  "version": "0.1.0",
+  "description": "Windows 11 UMDF 2 / IddCx 1.10 Virtual Display Driver, CLI, and native tray companion for HDR10 and Sunshine streaming.",
+  "homepage": "https://zerovdd.dev",
+  "license": "MIT OR Apache-2.0",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/zerovdd/zerovdd/releases/download/v0.1.0/zerovdd-0.1.0-x64.zip",
+      "hash": "REPLACE_WITH_X64_ZIP_SHA256"
+    },
+    "arm64": {
+      "url": "https://github.com/zerovdd/zerovdd/releases/download/v0.1.0/zerovdd-0.1.0-ARM64.zip",
+      "hash": "REPLACE_WITH_ARM64_ZIP_SHA256"
+    }
+  },
+  "bin": [
+    "zerovdd.exe",
+    "zerovdd-tray.exe"
+  ],
+  "shortcuts": [
+    [
+      "zerovdd-tray.exe",
+      "ZeroVDD Tray"
+    ]
+  ],
+  "checkver": {
+    "github": "https://github.com/zerovdd/zerovdd"
+  },
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/zerovdd/zerovdd/releases/download/v$version/zerovdd-$version-x64.zip"
+      },
+      "arm64": {
+        "url": "https://github.com/zerovdd/zerovdd/releases/download/v$version/zerovdd-$version-ARM64.zip"
+      }
+    }
+  },
+  "notes": [
+    "To install or upgrade the Kernel/UMDF driver from an elevated Administrator prompt, run:",
+    "  zerovdd setup install --inf \"$dir\\driver\\zerovdd.inf\"",
+    "For full unattended installation including the Session-0 zerovdd-svc service, prefer the MSI or `winget install ZeroVDD.ZeroVDD`."
+  ]
+}
