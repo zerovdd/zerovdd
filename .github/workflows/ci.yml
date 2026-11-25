@@ -87,6 +87,11 @@ jobs:
           cargo install --locked cargo-machete
           cargo machete
 
+      - name: Setup Windows 11 WDK (${{ matrix.arch }})
+        uses: ./.github/actions/setup-wdk
+        with:
+          arch: ${{ matrix.arch }}
+
       - name: Build WDK driver and run InfVerif /u /h + ApiValidator (when driver-wdk is present)
         shell: pwsh
         env:

@@ -6,7 +6,6 @@ use serde::Serialize;
 use uuid::Uuid;
 use zerovdd_client::gpu::GpuSelector;
 use zerovdd_client::monitor_guid_for_name;
-use zerovdd_client::topology::DisplayRotation;
 use zerovdd_proto::ipc::{
     BitDepth, ColorSpace, DisplayAddRequest, DisplayOrientation, DisplayRemoveRequest,
     DisplaySetModeRequest, IpcEnvelope, IpcRequest, IpcResponse, SwitchGpuRequest, TopologyMode,
@@ -705,7 +704,7 @@ fn run_standalone_add(
     };
     use zerovdd_client::device::ControlDevice;
     use zerovdd_client::gpu::{enumerate_dxgi_adapters, select_gpu};
-    use zerovdd_client::topology::{AdapterLuid, StreamingTopologyRequest};
+    use zerovdd_client::topology::{AdapterLuid, DisplayRotation, StreamingTopologyRequest};
     use zerovdd_config::SunshineTopologyMode;
     use zerovdd_proto::types::{
         AddDisplayRequest, HdrProfile, OwnershipMode, RemoveDisplayRequest, SetRenderAdapterRequest,

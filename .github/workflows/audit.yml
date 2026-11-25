@@ -45,7 +45,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Run cargo-audit
-        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+      - name: Setup pinned Rust toolchain
+        uses: ./.github/actions/setup-rust
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          toolchain: "1.100.0"
+          components: ""
+          targets: ""
+          cache-key: "linux-audit"
+
+      - name: Install and run cargo-audit
+        shell: bash
+        run: |
+          cargo install --locked cargo-audit
+          cargo audit

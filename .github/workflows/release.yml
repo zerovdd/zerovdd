@@ -91,6 +91,11 @@ jobs:
           }
           wix.exe --version
 
+      - name: Setup Windows 11 WDK (${{ matrix.arch }})
+        uses: ./.github/actions/setup-wdk
+        with:
+          arch: ${{ matrix.arch }}
+
       - name: Build release workspace binaries
         shell: pwsh
         run: cargo build --workspace --release --target ${{ matrix.target }}

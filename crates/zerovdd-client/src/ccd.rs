@@ -357,8 +357,10 @@ pub fn apply_display_mode_in_place<B: DisplayTopologyBackend>(
     )
 }
 
+#[cfg(any(windows, test))]
 const WIN32_ERROR_ACCESS_DENIED: i32 = 5;
 
+#[cfg(any(windows, test))]
 pub(crate) fn should_retry_on_input_desktop(err: &ClientError) -> bool {
     matches!(
         err,

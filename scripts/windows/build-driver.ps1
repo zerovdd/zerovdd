@@ -137,6 +137,31 @@ function Get-DriverCargoVersion {
     throw "Could not extract [workspace.package] version from $CargoTomlPath"
 }
 
+function Resolve-VsMsvcDir {
+    $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        return $null
+    }
+    $installPath = (& $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($installPath)) {
+        $installPath = (& $vswhere -latest -products * -property installationPath 2>$null | Select-Object -First 1)
+    }
+    if ([string]::IsNullOrWhiteSpace($installPath)) {
+        return $null
+    }
+    $msvcRoot = Join-Path $installPath "VC\Tools\MSVC"
+    if (-not (Test-Path $msvcRoot)) {
+        return $null
+    }
+    $latest = Get-ChildItem -Path $msvcRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+    if ($latest) {
+        return $latest.FullName
+    }
+    return $null
+}
+
 $ArchList = Normalize-ArchList -InputArch $Arch
 $WdkRoot = Resolve-WdkRoot
 $SdkVersion = Resolve-SdkVersion -WdkRoot $WdkRoot
@@ -148,10 +173,11 @@ $SignTool = Resolve-ToolPath -WdkRoot $WdkRoot -SdkVersion $SdkVersion -Relative
 
 $LocalCrtRoot = Join-Path $env:LOCALAPPDATA "zerovdd-wdk\crt"
 $HasLocalCrt = Test-Path (Join-Path $LocalCrtRoot "crt\include")
+$VsMsvcDir = if ($HasLocalCrt) { $null } else { Resolve-VsMsvcDir }
 $LlvmBin = Resolve-LlvmBin
 
 Write-Host "[build-driver] WDK root    : $WdkRoot (SDK $SdkVersion)"
-Write-Host "[build-driver] Local CRT   : $(if ($HasLocalCrt) { $LocalCrtRoot } else { 'using host/VS environment' })"
+Write-Host "[build-driver] Local CRT   : $(if ($HasLocalCrt) { $LocalCrtRoot } elseif ($VsMsvcDir) { $VsMsvcDir } else { 'using host/VS environment' })"
 Write-Host "[build-driver] LLVM bin    : $(if ($LlvmBin) { $LlvmBin } else { 'using host PATH' })"
 Write-Host "[build-driver] Profile     : $Profile"
 Write-Host "[build-driver] Archs       : $($ArchList -join ', ')"
@@ -199,6 +225,7 @@ foreach ($archName in $ArchList) {
     $includeList = New-Object System.Collections.Generic.List[string]
     $includeList.Add((Join-Path $WdkRoot "Include\$SdkVersion\um"))
     $includeList.Add((Join-Path $WdkRoot "Include\$SdkVersion\shared"))
+    $includeList.Add((Join-Path $WdkRoot "Include\$SdkVersion\ucrt"))
     $includeList.Add((Join-Path $WdkRoot "Include\wdf\umdf\2.33"))
     if ($HasLocalCrt) {
         $includeList.Add((Join-Path $LocalCrtRoot "crt\include"))
@@ -206,26 +233,43 @@ foreach ($archName in $ArchList) {
         $includeList.Add((Join-Path $LocalCrtRoot "sdk\include\um"))
         $includeList.Add((Join-Path $LocalCrtRoot "sdk\include\shared"))
     }
-    elseif (-not [string]::IsNullOrWhiteSpace($env:INCLUDE)) {
-        foreach ($p in ($env:INCLUDE -split ";")) {
-            if (-not [string]::IsNullOrWhiteSpace($p)) {
-                $includeList.Add($p)
+    else {
+        if ($VsMsvcDir) {
+            $vsInc = Join-Path $VsMsvcDir "include"
+            if (Test-Path $vsInc) {
+                $includeList.Add($vsInc)
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:INCLUDE)) {
+            foreach ($p in ($env:INCLUDE -split ";")) {
+                if (-not [string]::IsNullOrWhiteSpace($p)) {
+                    $includeList.Add($p)
+                }
             }
         }
     }
 
     $libList = New-Object System.Collections.Generic.List[string]
     $libList.Add((Join-Path $WdkRoot "Lib\$SdkVersion\um\$wdkArch"))
+    $libList.Add((Join-Path $WdkRoot "Lib\$SdkVersion\ucrt\$wdkArch"))
     $libList.Add((Join-Path $WdkRoot "Lib\wdf\umdf\$wdkArch\2.33"))
     if ($HasLocalCrt) {
         $libList.Add((Join-Path $LocalCrtRoot "crt\lib\$wdkArch"))
         $libList.Add((Join-Path $LocalCrtRoot "sdk\lib\ucrt\$wdkArch"))
         $libList.Add((Join-Path $LocalCrtRoot "sdk\lib\um\$wdkArch"))
     }
-    elseif (-not [string]::IsNullOrWhiteSpace($env:LIB)) {
-        foreach ($p in ($env:LIB -split ";")) {
-            if (-not [string]::IsNullOrWhiteSpace($p)) {
-                $libList.Add($p)
+    else {
+        if ($VsMsvcDir) {
+            $vsLib = Join-Path $VsMsvcDir "lib\$wdkArch"
+            if (Test-Path $vsLib) {
+                $libList.Add($vsLib)
+            }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($env:LIB)) {
+            foreach ($p in ($env:LIB -split ";")) {
+                if (-not [string]::IsNullOrWhiteSpace($p)) {
+                    $libList.Add($p)
+                }
             }
         }
     }

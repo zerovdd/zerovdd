@@ -1,0 +1,109 @@
+name: Setup Windows 11 WDK
+description: Downloads and caches pinned Windows 11 SDK + WDK 10.0.26100 NuGet packages for IddCx 1.10 driver builds.
+
+inputs:
+  arch:
+    description: Target driver architecture (x64 or ARM64)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Restore cached WDK kit
+      id: wdk-cache
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ~/AppData/Local/zerovdd-wdk/kit
+        key: zerovdd-wdk-26100.6584-9457-${{ inputs.arch }}
+
+    - name: Provision Windows 11 WDK + SDK NuGet overlay
+      if: steps.wdk-cache.outputs.cache-hit != 'true'
+      shell: pwsh
+      env:
+        WDK_ARCH: ${{ inputs.arch }}
+      run: |
+        Set-StrictMode -Version Latest
+        $ErrorActionPreference = "Stop"
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+        $archNorm = if ($env:WDK_ARCH.Trim().ToLowerInvariant() -eq "arm64") { "arm64" } else { "x64" }
+        $sdkVer = "10.0.26100.9457"
+        $wdkVer = "10.0.26100.6584"
+        $sdkDirVer = "10.0.26100.0"
+
+        $baseRoot = Join-Path $env:LOCALAPPDATA "zerovdd-wdk"
+        $kitRoot = Join-Path $baseRoot "kit"
+        $tmpRoot = Join-Path $env:RUNNER_TEMP "zerovdd-wdk-dl"
+        New-Item -ItemType Directory -Force -Path $kitRoot, $tmpRoot | Out-Null
+
+        function Merge-Dir {
+          param([string]$Src, [string]$Dst)
+          if (-not (Test-Path $Src)) {
+            throw "Expected NuGet subdirectory missing: $Src"
+          }
+          New-Item -ItemType Directory -Force -Path $Dst | Out-Null
+          & robocopy $Src $Dst /E /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+          if ($LASTEXITCODE -ge 8) {
+            throw "robocopy failed copying $Src -> $Dst (exit code $LASTEXITCODE)"
+          }
+        }
+
+        function Fetch-NuGet {
+          param([string]$Id, [string]$Version)
+          $idLower = $Id.ToLowerInvariant()
+          $url = "https://api.nuget.org/v3-flatcontainer/$idLower/$Version/$idLower.$Version.nupkg"
+          $zipPath = Join-Path $tmpRoot "$idLower.$Version.zip"
+          $outDir = Join-Path $tmpRoot "$idLower.$Version"
+          Write-Host "[setup-wdk] Downloading $Id $Version..."
+          $ProgressPreference = "SilentlyContinue"
+          Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+          if (Test-Path $outDir) {
+            Remove-Item -Recurse -Force $outDir
+          }
+          [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $outDir)
+          Remove-Item -Force $zipPath
+          return $outDir
+        }
+
+        $btDir = Fetch-NuGet -Id "Microsoft.Windows.SDK.BuildTools" -Version $sdkVer
+        Merge-Dir -Src (Join-Path $btDir "bin") -Dst (Join-Path $kitRoot "bin")
+
+        $sdkCppDir = Fetch-NuGet -Id "Microsoft.Windows.SDK.CPP" -Version $sdkVer
+        Merge-Dir -Src (Join-Path $sdkCppDir "c") -Dst $kitRoot
+
+        $sdkArchDir = Fetch-NuGet -Id "Microsoft.Windows.SDK.CPP.$archNorm" -Version $sdkVer
+        Merge-Dir -Src (Join-Path $sdkArchDir "c") -Dst (Join-Path $kitRoot "Lib\$sdkDirVer")
+
+        # Always include WDK.x64 for x64 host validation tools (InfVerif, ApiValidator, StampInf).
+        $wdkX64Dir = Fetch-NuGet -Id "Microsoft.Windows.WDK.x64" -Version $wdkVer
+        Merge-Dir -Src (Join-Path $wdkX64Dir "c") -Dst $kitRoot
+
+        if ($archNorm -eq "arm64") {
+          $wdkArm64Dir = Fetch-NuGet -Id "Microsoft.Windows.WDK.ARM64" -Version $wdkVer
+          Merge-Dir -Src (Join-Path $wdkArm64Dir "c") -Dst $kitRoot
+        }
+
+        Remove-Item -Recurse -Force $tmpRoot
+
+        foreach ($required in @(
+          "Include\$sdkDirVer\um\iddcx\1.10\IddCx.h",
+          "Lib\$sdkDirVer\um\$archNorm\iddcx\1.10\IddCxStub.lib",
+          "tools\$sdkDirVer\x64\infverif.exe",
+          "bin\$sdkDirVer\x64\apivalidator.exe",
+          "bin\$sdkDirVer\x64\stampinf.exe",
+          "bin\$sdkDirVer\x86\Inf2Cat.exe",
+          "bin\$sdkDirVer\x64\signtool.exe"
+        )) {
+          $full = Join-Path $kitRoot $required
+          if (-not (Test-Path $full)) {
+            throw "WDK provisioning verification failed; missing $full"
+          }
+        }
+        Write-Host "[setup-wdk] WDK kit ready at $kitRoot for $archNorm."
+
+    - name: Export WDKContentRoot
+      shell: pwsh
+      run: |
+        $kitRoot = Join-Path $env:LOCALAPPDATA "zerovdd-wdk\kit"
+        "WDKContentRoot=$kitRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
