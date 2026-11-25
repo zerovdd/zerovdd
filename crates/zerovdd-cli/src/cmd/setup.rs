@@ -1,9 +1,12 @@
 //! Driver installation, upgrade, uninstall, and status subcommands (`zerovdd setup`).
 
-use std::path::{Path, PathBuf};
+#[cfg(any(windows, test))]
+use std::path::Path;
+use std::path::PathBuf;
 
 use anyhow::{bail, Result};
 use clap::{Args, Subcommand};
+#[cfg(any(windows, test))]
 use zerovdd_installer::driver_store::DRIVER_INF_FILENAME;
 use zerovdd_installer::{DevCertOption, InstallOptions, UninstallOptions};
 
@@ -54,6 +57,7 @@ pub struct SetupPackageArgs {
 }
 
 /// Returns the architecture subdirectory name under `dist/` for the compiled binary target.
+#[cfg(any(windows, test))]
 pub const fn target_dist_arch_dir() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         "ARM64"
@@ -63,6 +67,7 @@ pub const fn target_dist_arch_dir() -> &'static str {
 }
 
 /// Resolves `--inf <path>` or falls back to executable-relative and `dist/<arch>/zerovdd.inf` locations.
+#[cfg(any(windows, test))]
 pub fn resolve_inf_path_from(
     explicit: Option<&Path>,
     exe_path: Option<&Path>,

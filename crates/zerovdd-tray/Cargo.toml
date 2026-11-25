@@ -21,12 +21,12 @@ ignored = ["windows"]
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-zerovdd-config = { path = "../zerovdd-config" }
 zerovdd-proto = { path = "../zerovdd-proto" }
 serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true
 
 [target.'cfg(windows)'.dependencies]
+zerovdd-config = { path = "../zerovdd-config" }
 windows = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

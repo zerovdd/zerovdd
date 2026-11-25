@@ -872,6 +872,10 @@ fn run_standalone_add(
 }
 
 #[cfg(not(windows))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "non-Windows stub matches Windows standalone display creation signature"
+)]
 fn run_standalone_add(
     _args: &DisplayAddArgs,
     _mode: &ModeSpec,

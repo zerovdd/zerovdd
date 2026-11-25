@@ -1,6 +1,8 @@
 //! LizardByte Sunshine streaming session and configuration subcommands (`zerovdd sunshine`).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
+#[cfg(any(windows, test))]
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -150,6 +152,7 @@ pub struct ParsedSunshineSession {
 }
 
 /// Portable process snapshot entry used for ancestor `sunshine.exe` discovery.
+#[cfg(any(windows, test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessEntry {
     /// OS process identifier.
@@ -344,6 +347,7 @@ pub fn sanitize_client_id(raw: &str) -> String {
 /// Guards against process-tree cycles (including self-parenting PIDs), verifies monotonic
 /// ancestor creation timestamps (`parent.creation_time <= descendant.creation_time`) to reject
 /// recycled PIDs, and skips wrapper shells such as `cmd.exe`, `powershell.exe`, or `conhost.exe`.
+#[cfg(any(windows, test))]
 pub fn find_ancestor_sunshine(entries: &[ProcessEntry], start_pid: u32) -> Option<(u32, u64)> {
     let by_pid: BTreeMap<u32, &ProcessEntry> = entries.iter().map(|e| (e.pid, e)).collect();
     let start_entry = by_pid.get(&start_pid)?;
@@ -377,6 +381,7 @@ pub fn find_ancestor_sunshine(entries: &[ProcessEntry], start_pid: u32) -> Optio
     None
 }
 
+#[cfg(any(windows, test))]
 fn is_sunshine_exe(exe_name: &str) -> bool {
     let basename = exe_name
         .rsplit(['\\', '/'])

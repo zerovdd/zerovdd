@@ -6,7 +6,9 @@ use anyhow::Result;
 use clap::Args;
 use serde::Serialize;
 use zerovdd_client::gpu::GpuAdapterInfo;
-use zerovdd_client::hdr::{OsVersionInfo, WIN11_24H2_BUILD};
+use zerovdd_client::hdr::OsVersionInfo;
+#[cfg(any(windows, test))]
+use zerovdd_client::hdr::WIN11_24H2_BUILD;
 use zerovdd_installer::InstallerStatus;
 use zerovdd_proto::ipc::{IpcRequest, IpcResponse, ServiceHealth};
 
@@ -30,6 +32,13 @@ pub struct DoctorArgs {
 /// Control Device accessibility and runtime telemetry state.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
+#[cfg_attr(
+    not(windows),
+    allow(
+        dead_code,
+        reason = "Windows Control Device variants are constructed on Windows targets and in tests"
+    )
+)]
 pub enum ControlDeviceStatus {
     /// Control Device opened and responded to `IOCTL_GET_VERSION` / `IOCTL_GET_STATUS`.
     Accessible {
@@ -167,6 +176,7 @@ pub struct DoctorReport {
 }
 
 /// Classifies an OS build number into the corresponding Windows HDR/ACM API profile.
+#[cfg(any(windows, test))]
 pub fn classify_hdr_api_profile(build: u32) -> (&'static str, bool) {
     if build >= WIN11_24H2_BUILD {
         (
