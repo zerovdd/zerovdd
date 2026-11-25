@@ -25,7 +25,7 @@ clap = { version = "4", features = ["derive"] }
 proptest = "1"
 windows = "0.62"
 windows-service = "0.8"
-syn = { version = "2", features = ["full", "visit"] }
+syn = { version = "3", features = ["full", "visit"] }
 regex = "1"
 serde_yaml_ng = "0.10"
 tempfile = "3"
