@@ -27,7 +27,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
     Zero virtual monitors while any physical display is active, with automatic `headless_standby` fallback when all monitors are powered off or disconnected. Synthesizes per-client EDID 1.4 + CTA-861-G blocks with configurable PPI, BT.709 / BT.2020 / DCI-P3 gamuts, 8 / 10 / 12 bpc caps, verbatim custom EDID loading, and 64-bit CVT-RBv2 timings up to 8K@240Hz and fractional 59.94 / 119.88 / 239.76 Hz.
   </Card>
   <Card title="Session-0 Service & Native Tray" icon="rocket">
-    `zerovdd-svc` runs in Session 0 with an ACL-protected named pipe for Interactive Users and a console-session CCD trampoline that survives UAC prompts, Lock Screen (`Win+L`), `sunshine.exe` crashes, and unexpected reboots. Pair it with the native Win32 `zerovdd-tray.exe` companion.
+    `zerovdd-svc` runs in Session 0 with an ACL-protected local named pipe (blocking remote SMB clients) and a console-session CCD trampoline that survives UAC prompts, Lock Screen (`Win+L`), `sunshine.exe` crashes, and unexpected reboots. Pair it with the native Win32 `zerovdd-tray.exe` companion.
   </Card>
   <Card title="Windows 11 24H2 Split HDR / ACM" icon="sun">
     Detects OS build via `RtlGetVersion` so Windows 11 24H2+ uses `SET_HDR_STATE` and `SET_WCG_STATE` independently. Enabling HDR on a virtual monitor never flips Auto Color Management (ACM) on your physical monitors.

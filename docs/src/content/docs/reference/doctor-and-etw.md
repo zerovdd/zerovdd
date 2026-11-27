@@ -17,7 +17,7 @@ description: Schema for zerovdd doctor --json telemetry and instructions for cap
 | `os` | `object` | Real Windows version via `RtlGetVersion` (`major`, `minor`, `build`), `hdr_api_profile`, and `split_hdr_acm_supported` (`true` on build `>= 26100`). |
 | `gpus` | `array` | Enumerated DXGI adapters (`name`, `adapter_luid_low`, `adapter_luid_high`, `vendor_id`, `device_id`, `pci_bus/device/function`, `dedicated_vram_bytes`, `is_software`). |
 | `control_device` | `object` | Tagged state: `accessible` (`device_path`, `protocol_version`, `adapter_ready`, `hdr_capable`, `uptime_secs`, `last_gpu_switch_failed`), `access_denied`, or `not_installed`. |
-| `active_displays` | `array` | Active virtual monitors returned by `IOCTL_LIST_DISPLAYS` when `control_device` is accessible. |
+| `active_displays` | `array` | Active virtual monitors returned by `IOCTL_LIST_DISPLAYS` when `control_device` is accessible, falling back to `zerovdd-svc` IPC (`DisplayList`) for non-elevated callers when `control_device` reports `access_denied`. |
 | `service` | `object` | Windows SCM `scm_state` (`running`, `stopped`, `not_installed`, etc.) and live `ipc_health` (`service_version`, `driver_connected`, `protocol_version`, `active_displays`, `uptime_secs`, `backup_present`). |
 | `etw_capture` | `object \| null` | Present when `--capture-etw <SECS>` is passed (`provider_name`, `provider_guid`, `etl_path`, `duration_secs`, `captured`, `detail`). |
 

@@ -5,7 +5,7 @@ description: Create your first virtual display, update its mode in place, launch
 
 import { Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-ZeroVDD attaches **zero virtual monitors at boot** by default so your physical desktop stays untouched until you request a virtual display.
+ZeroVDD attaches **zero virtual monitors** while any physical display is active, so your desktop stays untouched until you request a virtual display. When all physical monitors are powered off or disconnected, `headless_standby` (enabled by default) keeps a `1920x1080@60` fallback display active and automatically departs it once a physical monitor wakes up.
 
 ## Your First Virtual Display
 

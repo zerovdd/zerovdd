@@ -13,7 +13,7 @@ ZeroVDD ships as a Windows 11 UMDF 2 / IddCx 1.10 driver (`zerovdd.dll`, `zerovd
   - Windows 11 24H2 (OS build `26100`+) additionally enables split HDR and Auto Color Management (ACM / WCG) control.
 - **Privileges:**
   - **Administrator** privileges are required to install, upgrade, or uninstall the driver (`zerovdd setup`), capture ETW traces (`zerovdd doctor --capture-etw`), or open `\ZeroVddControl` directly in standalone mode.
-  - Once `zerovdd-svc` is running, standard Interactive Users can manage displays, GPUs, and Sunshine sessions over `\\.\pipe\zerovdd-svc` without elevation.
+  - Once `zerovdd-svc` is running, standard local users (interactive desktops and non-interactive local or SSH shells, with remote SMB clients blocked) can manage displays, GPUs, and Sunshine sessions over `\\.\pipe\zerovdd-svc` without elevation.
 
 ## Install ZeroVDD
 

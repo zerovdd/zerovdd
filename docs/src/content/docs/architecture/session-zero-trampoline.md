@@ -17,7 +17,7 @@ sequenceDiagram
 
     Sunshine->>CLI: global_prep_cmd Do (SUNSHINE_CLIENT_* env)
     CLI->>CLI: Walk ancestors for sunshine.exe (pid, creation_time)
-    CLI->>Svc: StartSession over \\.\pipe\zerovdd-svc (SY/BA/IU)
+    CLI->>Svc: StartSession over \\.\pipe\zerovdd-svc (SY/BA/IU/BU)
     Svc->>Tramp: CreateProcessAsUserW (snapshot -> topology-backup.json)
     Svc->>Drv: IOCTL_ADD_DISPLAY via \ZeroVddControl (SYSTEM)
     Drv-->>Svc: AdapterLuid + TargetId
@@ -31,7 +31,7 @@ sequenceDiagram
 ### Privileged Service (`zerovdd-svc.exe`, Session 0)
 
 - Runs as `LocalSystem` in Session 0.
-- Listens on `\\.\pipe\zerovdd-svc` with strict DACL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)`.
+- Listens on `\\.\pipe\zerovdd-svc` with strict DACL `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;BU)` and `PIPE_REJECT_REMOTE_CLIENTS`.
 - Owns persistent, headless-standby, and session Control Device handles on `\ZeroVddControl`.
 - Atomically persists physical display layout snapshots to `%ProgramData%\zerovdd\topology-backup.json`.
 
@@ -42,12 +42,13 @@ When a topology snapshot, layout apply, or restore is needed:
 1. Queries the active interactive console session via `WTSGetActiveConsoleSessionId()`.
 2. Duplicates the service's own `LocalSystem` primary token via `OpenProcessToken` + `DuplicateTokenEx`.
 3. Retargets `TokenSessionId` via `SetTokenInformation` to the active console session (`Session > 0`).
-4. Spawns `zerovdd.exe internal-ccd <snapshot|apply|restore>` via `CreateProcessAsUserW` targeting `winsta0\default` (or `winsta0\winlogon` when at the Lock Screen / UAC secure desktop).
+4. Spawns `zerovdd.exe internal-ccd <probe|snapshot|apply|restore>` via `CreateProcessAsUserW` targeting `winsta0\default` (or `winsta0\winlogon` when at the Lock Screen / UAC secure desktop).
 
-Because the helper executes inside the active console session with `LocalSystem` rights, `QueryDisplayConfig`, `SetDisplayConfig`, and Windows 11 24H2 `SET_HDR_STATE` / `SET_WCG_STATE` calls succeed on logged-in desktops, UAC prompts, and the Lock Screen (`Win+L`).
+Because the helper executes inside the active console session with `LocalSystem` rights (and retries `QueryDisplayConfig` on the active input desktop when locked), `QueryDisplayConfig`, `SetDisplayConfig`, and Windows 11 24H2 `SET_HDR_STATE` / `SET_WCG_STATE` calls succeed on logged-in desktops, UAC prompts, and the Lock Screen (`Win+L`).
 
-### Crash & Reboot Recovery (`session.rs`)
+### Crash, Reboot & Dynamic Headless Recovery (`session.rs`, `service.rs`)
 
 - **Process supervision:** `zerovdd-svc` opens the recorded `sunshine.exe` PID with `SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION` and verifies `GetProcessTimes` matches `owner_creation_time` to prevent PID-reuse races. If `sunshine.exe` exits unexpectedly (crash or `taskkill /F`), the watcher immediately departs the virtual display and runs `internal-ccd restore`.
 - **Reboot / BSOD recovery:** On service startup, if `%ProgramData%\zerovdd\topology-backup.json` exists on disk, `zerovdd-svc` restores physical monitors immediately when a console session is active, or defers restoration until `SERVICE_CONTROL_SESSIONCHANGE` delivers `ConsoleConnect`, `SessionLogon`, or `SessionUnlock`.
+- **Dynamic headless standby:** `zerovdd-svc` watches monitor PnP interface arrivals/removals (`CM_Register_Notification` on `GUID_DEVINTERFACE_MONITOR`), `SessionLock`, and power events (`SERVICE_CONTROL_POWEREVENT`). When zero live physical displays remain (filtering Windows 11 OS-forced/simulated CCD ghost paths) for a 4-second quiet window, it attaches and activates `zerovdd-headless-standby` (canceling pending checks across suspend and self-healing if the standby display drops after a TDR/`WUDFHost` restart), then departs it within 500 ms once any physical monitor wakes up.
 - **Fallback restore:** If no backup snapshot is present during `zerovdd display restore`, `restore_streaming_session_with_fallback` enables all attached physical display paths so users are never stranded on a blank monitor.
