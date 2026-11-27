@@ -24,6 +24,8 @@ pub struct InternalCcdArgs {
 pub enum InternalCcdCommand {
     /// Snapshot the current physical display topology to `topology-backup.json`.
     Snapshot(SnapshotArgs),
+    /// Probe currently active CCD display paths and output JSON diagnostics.
+    Probe,
     /// Resolve the arrived virtual display in CCD and apply streaming topology + HDR state.
     Apply(ApplyArgs),
     /// Update mode and optional HDR state on an active virtual display in place.
@@ -59,6 +61,15 @@ pub struct SnapshotArgs {
     /// Overwrite an existing snapshot file instead of preserving the pre-session backup.
     #[arg(long)]
     pub force_overwrite: bool,
+    /// Optional virtual adapter LUID low part to exclude from the snapshot.
+    #[arg(long)]
+    pub exclude_luid_low: Option<u32>,
+    /// Optional virtual adapter LUID high part to exclude from the snapshot.
+    #[arg(long, allow_hyphen_values = true)]
+    pub exclude_luid_high: Option<i32>,
+    /// Optional virtual target ID to exclude from the snapshot.
+    #[arg(long)]
+    pub exclude_target_id: Option<u32>,
 }
 
 /// Serializable JSON payload accepted by `zerovdd internal-ccd apply --payload-json <PATH>`.
@@ -264,10 +275,26 @@ pub fn resolve_apply_payload(args: &ApplyArgs) -> Result<InternalCcdApplyPayload
 pub fn execute(args: InternalCcdArgs) -> Result<()> {
     match args.action {
         InternalCcdCommand::Snapshot(s) => run_snapshot(s),
+        InternalCcdCommand::Probe => run_probe(),
         InternalCcdCommand::Apply(a) => run_apply(a),
         InternalCcdCommand::SetMode(m) => run_set_mode(m),
         InternalCcdCommand::Restore(r) => run_restore(r),
     }
+}
+
+#[cfg(windows)]
+fn run_probe() -> Result<()> {
+    use zerovdd_client::ccd::query_active_path_probes;
+
+    ensure_console_session()?;
+    let probes = query_active_path_probes()?;
+    println!("{}", serde_json::to_string(&probes)?);
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_probe() -> Result<()> {
+    bail!("zerovdd internal-ccd probe is only supported on Windows")
 }
 
 #[cfg(windows)]
@@ -309,9 +336,19 @@ fn run_snapshot(args: SnapshotArgs) -> Result<()> {
         return Ok(());
     }
 
+    let exclude_target = match (
+        args.exclude_luid_low,
+        args.exclude_luid_high,
+        args.exclude_target_id,
+    ) {
+        (Some(low), Some(high), Some(tid)) => Some((AdapterLuid::new(low, high), tid)),
+        (None, None, None) => None,
+        _ => bail!("exclude LUID low/high and target ID must all be provided together"),
+    };
+
     let backend = WindowsCcdBackend::new();
     let state = backend.query_topology()?;
-    let snapshot = snapshot_from_state(&state, unix_time_ms(), None);
+    let snapshot = snapshot_from_state(&state, unix_time_ms(), exclude_target);
     if snapshot.paths.iter().any(|p| p.active) {
         save_snapshot_atomic(&path, &snapshot)?;
     }

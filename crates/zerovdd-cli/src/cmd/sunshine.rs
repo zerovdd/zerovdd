@@ -13,7 +13,7 @@ use clap::{Args, Subcommand};
 use serde::Serialize;
 use serde_json::Value;
 use tempfile::NamedTempFile;
-use zerovdd_config::{default_config_path, load_or_default, SunshineTopologyMode};
+use zerovdd_config::{default_config_path, load_or_default, save_atomic, SunshineTopologyMode};
 use zerovdd_proto::ipc::{
     IpcRequest, IpcResponse, ServiceHealth, SessionStatus, StartSessionRequest, StopSessionRequest,
     TopologyMode, IPC_PIPE_NAME, MAX_IPC_CLIENT_ID_LEN,
@@ -109,6 +109,9 @@ pub struct SunshineConfigureArgs {
     /// Clear a pinned `output_name` entry in `sunshine.conf` so Sunshine captures the primary virtual display.
     #[arg(long)]
     pub clear_output_name: bool,
+    /// Disable `headless_standby` in `%ProgramData%\zerovdd\config.toml` instead of keeping it enabled.
+    #[arg(long)]
+    pub no_headless_standby: bool,
     /// Output configuration plan or result as JSON.
     #[arg(long)]
     pub json: bool,
@@ -183,7 +186,7 @@ pub struct SunshineConfigureReport {
     pub config_path: PathBuf,
     /// Whether changes were written (`false` in dry-run mode or when already up to date).
     pub applied: bool,
-    /// Whether `sunshine.conf` needed modifications.
+    /// Whether `sunshine.conf` or `zerovdd` config needed modifications.
     pub changed: bool,
     /// Timestamped backup path created before modifying an existing `sunshine.conf`.
     pub backup_path: Option<PathBuf>,
@@ -191,6 +194,12 @@ pub struct SunshineConfigureReport {
     pub changes: Vec<String>,
     /// Warnings emitted during configuration inspection (e.g. pinned `output_name`).
     pub warnings: Vec<String>,
+    /// Whether `headless_standby` in `zerovdd` config needed an update (or was updated).
+    #[serde(default)]
+    pub headless_standby_changed: bool,
+    /// Path to `zerovdd` `config.toml` updated or inspected for `headless_standby`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zerovdd_config_path: Option<PathBuf>,
 }
 
 /// Executes a `zerovdd sunshine` subcommand.
@@ -1084,6 +1093,8 @@ pub fn configure_sunshine_file(
             backup_path: None,
             changes,
             warnings,
+            headless_standby_changed: false,
+            zerovdd_config_path: None,
         });
     }
 
@@ -1101,14 +1112,69 @@ pub fn configure_sunshine_file(
         backup_path,
         changes,
         warnings,
+        headless_standby_changed: false,
+        zerovdd_config_path: None,
     })
+}
+
+/// Ensures `headless_standby` equals `desired` in `zerovdd_config_path`, persisting atomically when `apply` is `true`.
+///
+/// Returns `Ok(true)` if the effective `headless_standby` value differs from `desired` and therefore
+/// needs (or received) an update.
+pub fn set_headless_standby_config(
+    zerovdd_config_path: &Path,
+    desired: bool,
+    apply: bool,
+) -> Result<bool> {
+    let mut cfg = load_or_default(zerovdd_config_path).with_context(|| {
+        format!(
+            "failed to load zerovdd config at {}",
+            zerovdd_config_path.display()
+        )
+    })?;
+    if cfg.headless_standby == desired {
+        return Ok(false);
+    }
+    if apply {
+        cfg.headless_standby = desired;
+        save_atomic(zerovdd_config_path, &cfg).with_context(|| {
+            format!(
+                "failed to save zerovdd config at {}",
+                zerovdd_config_path.display()
+            )
+        })?;
+    }
+    Ok(true)
 }
 
 fn run_configure(args: SunshineConfigureArgs) -> Result<()> {
     let config_path = resolve_sunshine_conf_path(args.config)?;
     let exe_path = std::env::current_exe().context("failed to resolve current executable path")?;
-    let report =
+    let mut report =
         configure_sunshine_file(&config_path, &exe_path, args.apply, args.clear_output_name)?;
+
+    let desired_standby = !args.no_headless_standby;
+    let zerovdd_cfg_path = default_config_path();
+    if set_headless_standby_config(&zerovdd_cfg_path, desired_standby, args.apply)? {
+        report.headless_standby_changed = true;
+        report.zerovdd_config_path = Some(zerovdd_cfg_path.clone());
+        report.changed = true;
+        if args.apply {
+            report.applied = true;
+        }
+        let change_desc = if desired_standby {
+            format!(
+                "enable `headless_standby = true` in `{}` (prevents Sunshine 0-display encoder deadlock when monitors sleep or disconnect)",
+                zerovdd_cfg_path.display()
+            )
+        } else {
+            format!(
+                "set `headless_standby = false` in `{}`",
+                zerovdd_cfg_path.display()
+            )
+        };
+        report.changes.push(change_desc);
+    }
 
     if args.json {
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -1129,7 +1195,7 @@ fn run_configure(args: SunshineConfigureArgs) -> Result<()> {
 
     if report.applied {
         println!(
-            "Updated Sunshine config at `{}`.",
+            "Updated Sunshine integration for `{}`.",
             report.config_path.display()
         );
         if let Some(ref backup) = report.backup_path {
@@ -1137,6 +1203,11 @@ fn run_configure(args: SunshineConfigureArgs) -> Result<()> {
         }
         for change in &report.changes {
             println!("  - {change}");
+        }
+        if report.headless_standby_changed {
+            println!(
+                "  Restart `zerovdd-svc` (`Restart-Service zerovdd-svc`) for the updated `headless_standby` setting to take effect."
+            );
         }
     } else {
         println!(
@@ -1465,5 +1536,37 @@ mod tests {
         assert!(!second.changed);
         assert!(second.backup_path.is_none());
         assert_eq!(fs::read_to_string(&conf_path).unwrap(), after_first);
+    }
+
+    #[test]
+    fn set_headless_standby_config_dry_run_and_apply_preserves_settings() {
+        let dir = TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+
+        assert!(!set_headless_standby_config(&cfg_path, true, false).unwrap());
+        assert!(!cfg_path.exists());
+
+        assert!(set_headless_standby_config(&cfg_path, false, false).unwrap());
+        assert!(!cfg_path.exists());
+
+        let mut initial = zerovdd_config::ConfigV1 {
+            headless_standby: false,
+            ..Default::default()
+        };
+        initial.sunshine.topology_mode = SunshineTopologyMode::Extend;
+        save_atomic(&cfg_path, &initial).unwrap();
+
+        assert!(set_headless_standby_config(&cfg_path, true, false).unwrap());
+        assert!(!load_or_default(&cfg_path).unwrap().headless_standby);
+
+        assert!(set_headless_standby_config(&cfg_path, true, true).unwrap());
+        let updated = load_or_default(&cfg_path).unwrap();
+        assert!(updated.headless_standby);
+        assert_eq!(updated.sunshine.topology_mode, SunshineTopologyMode::Extend);
+
+        assert!(!set_headless_standby_config(&cfg_path, true, true).unwrap());
+
+        assert!(set_headless_standby_config(&cfg_path, false, true).unwrap());
+        assert!(!load_or_default(&cfg_path).unwrap().headless_standby);
     }
 }

@@ -4,9 +4,10 @@ use std::mem::size_of;
 
 use tempfile::TempDir;
 use zerovdd_client::ccd::{
-    apply_display_mode_in_place, apply_streaming_session_with_wait,
-    resolve_virtual_display_with_wait, restore_streaming_session, DisplayTopologyBackend,
-    RetryPolicy, SessionApplyOptions,
+    apply_display_mode_in_place, apply_streaming_session_with_wait, is_forced_availability_target,
+    is_live_ccd_display, resolve_virtual_display_with_wait, restore_streaming_session,
+    DisplayTopologyBackend, RetryPolicy, SessionApplyOptions,
+    DISPLAYCONFIG_TARGET_FORCED_AVAILABILITY_MASK,
 };
 use zerovdd_client::device::{
     map_win32_hresult, parse_multi_sz_utf16, select_control_device_path,
@@ -860,6 +861,64 @@ fn headless_session_skips_empty_snapshot_and_cleans_stale_empty_backup() {
     assert!(report.snapshot_found);
     assert_eq!(report.restored_path_count, 0);
     assert!(!backup_path.exists());
+
+    let powered_off_backup = TopologySnapshot {
+        schema_version: TOPOLOGY_SNAPSHOT_SCHEMA_VERSION,
+        created_at_unix_ms: 1_700_000_000_001,
+        paths: vec![make_test_path(phys_luid, 10, 0, true, 0, 2560, 1440)],
+        hdr_states: Vec::new(),
+    };
+    save_snapshot_atomic(&backup_path, &powered_off_backup).expect("write powered-off snapshot");
+    let mut unplugged_state = CcdTopologyState {
+        os_build: WIN11_24H2_BUILD,
+        paths: vec![
+            make_test_path(phys_luid, 10, 0, false, 0, 2560, 1440),
+            make_test_path(virt_luid, 1, 0, true, 0, 1920, 1080),
+        ],
+    };
+    unplugged_state.paths[0].target_available = false;
+    let unplugged_backend = FakeTopologyBackend::new(vec![unplugged_state]);
+    let unplugged_report =
+        restore_streaming_session(&unplugged_backend, &backup_path, Some((virt_luid, 1)))
+            .expect("restore cleanly skips all-unplugged monitors and removes stale snapshot");
+    assert!(unplugged_report.snapshot_found);
+    assert_eq!(unplugged_report.restored_path_count, 0);
+    assert_eq!(
+        unplugged_report.skipped_unplugged_targets,
+        vec![(phys_luid, 10)]
+    );
+    assert!(!backup_path.exists());
+
+    assert!(!is_forced_availability_target(0));
+    assert!(!is_forced_availability_target(0x1 | 0x2));
+    assert!(is_forced_availability_target(0x4));
+    assert!(is_forced_availability_target(0x8));
+    assert!(is_forced_availability_target(0x10));
+    assert!(is_forced_availability_target(
+        DISPLAYCONFIG_TARGET_FORCED_AVAILABILITY_MASK
+    ));
+    assert!(is_live_ccd_display(
+        true,
+        true,
+        0x1,
+        r"\\?\DISPLAY#ZVD5644#1&1&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+        true
+    ));
+    assert!(!is_live_ccd_display(
+        true,
+        true,
+        0x10,
+        r"\\?\DISPLAY#ZVD5644#1&1&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+        true
+    ));
+    assert!(!is_live_ccd_display(true, true, 0x1, "", true));
+    assert!(!is_live_ccd_display(
+        true,
+        true,
+        0x1,
+        r"\\?\DISPLAY#ZVD5644#1&1&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}",
+        false
+    ));
 }
 
 #[cfg(windows)]

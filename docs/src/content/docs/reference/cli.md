@@ -116,8 +116,9 @@ Audits or updates LizardByte Sunshine's `sunshine.conf`. Runs in dry-run preview
 | Flag | Value | Description |
 | :--- | :--- | :--- |
 | `--config` | `<PATH>` | Override path to `sunshine.conf`. |
-| `--apply` | flag | Write timestamped backup and apply idempotent `global_prep_cmd` and `dd_configuration_option = disabled` edits. |
+| `--apply` | flag | Write timestamped backup, apply idempotent `global_prep_cmd` and `dd_configuration_option = disabled` edits, and ensure `headless_standby = true` (the default) unless `--no-headless-standby` is passed. |
 | `--clear-output-name` | flag | Remove pinned physical `output_name` entry so Sunshine captures the active primary display. |
+| `--no-headless-standby` | flag | Persist `headless_standby = false` in `%ProgramData%\zerovdd\config.toml` to disable automatic headless standby. |
 | `--json` | flag | Emit plan or applied diff as JSON. |
 
 ### `zerovdd sunshine start`

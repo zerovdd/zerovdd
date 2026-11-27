@@ -378,7 +378,29 @@ fn collect_report(capture_etw_secs: Option<u64>) -> Result<DoctorReport> {
                 },
             }
         }
-        Err(ClientError::AccessDenied) => ControlDeviceStatus::AccessDenied,
+        Err(ClientError::AccessDenied) => {
+            // WHY: Standard/non-elevated users cannot open `\ZeroVddControl` directly, so fall back
+            // to `zerovdd-svc` IPC to report active virtual displays accurately.
+            if let Ok(Some(IpcResponse::DisplayList { displays })) =
+                crate::cmd::display::try_send_ipc_request(&IpcRequest::DisplayList)
+            {
+                for d in displays {
+                    active_displays.push(DoctorDisplaySummary {
+                        monitor_guid: d.monitor_guid,
+                        client_name: d.client_name,
+                        adapter_luid_low: d.adapter_luid_low,
+                        adapter_luid_high: d.adapter_luid_high,
+                        target_id: d.target_id,
+                        width: d.width,
+                        height: d.height,
+                        refresh_num: d.refresh_num,
+                        refresh_den: d.refresh_den,
+                        lease_remaining_secs: d.lease_remaining_secs,
+                    });
+                }
+            }
+            ControlDeviceStatus::AccessDenied
+        }
         Err(ClientError::DeviceNotFound(_)) => ControlDeviceStatus::NotInstalled,
         Err(err) => ControlDeviceStatus::Error {
             message: err.to_string(),

@@ -29,9 +29,10 @@ ZeroVDD integrates directly with **upstream LizardByte Sunshine** with no forks 
    zerovdd sunshine configure --apply --clear-output-name
    ```
 
-   Before writing `sunshine.conf`, ZeroVDD saves a timestamped backup next to the file (`sunshine.conf.bak.<epoch>`). Applying makes three idempotent updates:
+   Before writing `sunshine.conf`, ZeroVDD saves a timestamped backup next to the file (`sunshine.conf.bak.<epoch>`). Applying makes up to four idempotent updates:
    - **`global_prep_cmd`:** Adds a Do/Undo entry calling `"<install-dir>\zerovdd.exe" sunshine start` and `"<install-dir>\zerovdd.exe" sunshine stop` with `"elevated": "false"`. Re-running updates the entry in place without disturbing other prep commands.
    - **`dd_configuration_option = disabled`:** Disables Sunshine's built-in display switcher so it cannot race with ZeroVDD's CCD topology and HDR transitions.
+   - **`headless_standby = true` (default out of the box):** Automatically keeps a fallback `1920x1080@60` display active whenever all physical monitors are powered off or disconnected for 4 seconds (so Sunshine never aborts during encoder probing before `global_prep_cmd` runs), and auto-departs it within 500 ms when any physical monitor wakes up. If `%ProgramData%\zerovdd\config.toml` previously disabled it, `--apply` re-enables it unless you pass `--no-headless-standby`.
    - **`--clear-output-name`:** Removes any pinned physical `output_name` (such as `\\.\DISPLAY1`) so Sunshine captures whichever primary display is active during streaming.
 
 3. **Restart Sunshine:**

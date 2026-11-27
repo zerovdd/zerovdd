@@ -7,7 +7,7 @@ use zerovdd_client::device::ControlClient;
 use zerovdd_client::{monitor_guid_for_name, ClientError};
 use zerovdd_config::{
     default_config_path, load_or_default, BitDepthConfig, ColorSpaceConfig, ConfigError, ConfigV1,
-    GpuSelector, HdrDefaults,
+    GpuSelector, HdrDefaults, SunshineTopologyMode,
 };
 use zerovdd_proto::types::{
     AddDisplayRequest, BitDepthPreference, ColorSpacePreference, HdrMasteringMetadata, HdrProfile,
@@ -15,7 +15,7 @@ use zerovdd_proto::types::{
 };
 use zerovdd_proto::validation::ProtoError;
 
-use crate::console_launcher::{ConsoleCcdRunner, LauncherError};
+use crate::console_launcher::{ApplyCcdPayload, ConsoleCcdRunner, LauncherError};
 
 /// Stable client identifier used for the optional headless-standby virtual display.
 pub const HEADLESS_STANDBY_CLIENT_ID: &str = "zerovdd-headless-standby";
@@ -215,31 +215,51 @@ pub fn reconcile_persistent_displays(
     Ok(attached_guids)
 }
 
-/// Attaches a `1920x1080@60Hz` SDR standby display when `headless_standby` is enabled and no active
-/// physical display is present, or removes it if no longer needed.
+/// Active headless-standby display identity and driver target coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StandbyDisplay {
+    /// Deterministic monitor GUID assigned to `zerovdd-headless-standby`.
+    pub guid: [u8; 16],
+    /// Driver `(adapter_luid, target_id)` returned by `AddDisplay` for filtering self during CCD probes.
+    pub target: Option<(zerovdd_client::topology::AdapterLuid, u32)>,
+}
+
+/// Attaches a `1920x1080@60Hz` SDR standby display when `headless_standby` is enabled and no other
+/// active display is present, or departs it automatically once another display becomes active.
 pub fn reconcile_headless_standby(
     driver: &dyn ControlClient,
     launcher: &dyn ConsoleCcdRunner,
     config: &ConfigV1,
-    standby_guid: &mut Option<[u8; 16]>,
+    standby: &mut Option<StandbyDisplay>,
 ) -> Result<bool, PersistentError> {
     if !config.headless_standby {
-        depart_headless_standby(driver, standby_guid)?;
+        depart_headless_standby(driver, standby)?;
         return Ok(false);
     }
-    if standby_guid.is_some() {
-        return Ok(true);
-    }
 
-    let has_active_display = match launcher.probe_has_active_displays() {
-        Ok(active) => active,
-        Err(LauncherError::ConsoleSessionUnavailable) => return Ok(false),
+    let active_targets = match launcher.probe_active_display_targets() {
+        Ok(targets) => targets,
+        Err(LauncherError::ConsoleSessionUnavailable) => return Ok(standby.is_some()),
         Err(err) => return Err(err.into()),
     };
 
-    if has_active_display {
+    let own_target = standby.and_then(|s| s.target);
+    let has_other_active_display = active_targets
+        .iter()
+        .any(|target| Some(*target) != own_target);
+
+    if has_other_active_display {
+        depart_headless_standby(driver, standby)?;
         return Ok(false);
     }
+
+    // WHY: Verify the tracked standby display is still live in CCD so GPU TDR, `WUDFHost`
+    // restarts, or manual OS disablement self-heal instead of stranding the host at 0 displays.
+    let own_still_active = own_target.is_some_and(|t| active_targets.contains(&t));
+    if standby.is_some() && own_still_active {
+        return Ok(true);
+    }
+    *standby = None;
 
     let guid = monitor_guid_for_name(HEADLESS_STANDBY_CLIENT_ID);
     let (refresh_num, refresh_den) = millihz_to_rational(HEADLESS_STANDBY_REFRESH_MHZ);
@@ -253,20 +273,48 @@ pub fn reconcile_headless_standby(
         OwnershipMode::HandleBound,
     );
     req.set_client_name(HEADLESS_STANDBY_CLIENT_ID)?;
-    driver.add_display(&req)?;
-    *standby_guid = Some(guid);
+    let resp = driver.add_display(&req)?;
+    let target = (
+        zerovdd_client::topology::AdapterLuid::new(resp.adapter_luid_low, resp.adapter_luid_high),
+        resp.target_id,
+    );
+    // WHY: Explicitly activate standby via CCD Extend so Windows enables it at `(0, 0)` even if
+    // the CCD database previously remembered the GUID as disabled or the lock screen is active,
+    // without disabling any physical monitor that might wake up concurrently.
+    let apply_payload = ApplyCcdPayload {
+        adapter_luid_low: resp.adapter_luid_low,
+        adapter_luid_high: resp.adapter_luid_high,
+        target_id: resp.target_id,
+        width: HEADLESS_STANDBY_WIDTH,
+        height: HEADLESS_STANDBY_HEIGHT,
+        refresh_num,
+        refresh_den,
+        hdr: false,
+        topology_mode: SunshineTopologyMode::Extend,
+        snapshot_path: None,
+        extend_origin: None,
+        make_virtual_primary: false,
+        rotation: zerovdd_client::topology::DisplayRotation::Identity,
+    };
+    if let Err(err) = launcher.apply(&apply_payload) {
+        eprintln!("zerovdd-svc headless standby CCD activation warning: {err}");
+    }
+    *standby = Some(StandbyDisplay {
+        guid,
+        target: Some(target),
+    });
     Ok(true)
 }
 
 /// Departs the active headless-standby virtual display if one is currently attached.
 pub fn depart_headless_standby(
     driver: &dyn ControlClient,
-    standby_guid: &mut Option<[u8; 16]>,
+    standby: &mut Option<StandbyDisplay>,
 ) -> Result<bool, PersistentError> {
-    let Some(guid) = standby_guid.take() else {
+    let Some(active) = standby.take() else {
         return Ok(false);
     };
-    match driver.remove_display(&RemoveDisplayRequest::by_guid(guid)) {
+    match driver.remove_display(&RemoveDisplayRequest::by_guid(active.guid)) {
         Ok(()) => Ok(true),
         Err(ClientError::MonitorNotFound) => Ok(false),
         Err(err) => Err(err.into()),

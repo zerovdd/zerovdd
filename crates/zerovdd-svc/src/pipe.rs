@@ -7,9 +7,11 @@ use zerovdd_proto::ipc::{
 };
 
 /// Strict SDDL DACL applied to `\\.\pipe\zerovdd-svc`:
-/// `SYSTEM` (full control), `Builtin Administrators` (full control), and
-/// `Interactive Logged-On Users` (read/write only, never `Everyone`).
-pub const IPC_PIPE_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)";
+/// `SYSTEM` (full control), `Builtin Administrators` (full control),
+/// `Interactive Logged-On Users` (read/write), and `Builtin Users` (read/write for
+/// local non-elevated shells such as SSH/WinRM while `PIPE_REJECT_REMOTE_CLIENTS`
+/// blocks remote SMB access; never `Everyone`).
+pub const IPC_PIPE_SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;BU)";
 
 /// Portable handler trait invoked by the named-pipe IPC dispatcher.
 pub trait IpcHandler: Send + Sync {

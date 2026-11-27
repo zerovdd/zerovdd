@@ -85,16 +85,17 @@ This writes `%TEMP%\zerovdd-driver.etl`, inspectable in Windows Performance Anal
   2. Confirm `dd_configuration_option = disabled` is set in `sunshine.conf` (via `zerovdd sunshine configure --apply`) so Sunshine's older switcher does not race with ZeroVDD.
   3. Confirm `--hdr` (CLI) or `SUNSHINE_CLIENT_HDR=true` (Sunshine) was sent and `hdr_capable: true` appears in `zerovdd doctor`.
 
-### 4. Pinned `output_name` or Black Screen in Sunshine
+### 4. Pinned `output_name`, 0-Display Encoder Deadlock, or Black Screen in Sunshine
 
-- **Symptom:** `zerovdd sunshine configure` warns that `sunshine.conf` pins `output_name = ...`, or Moonlight connects to a black screen in `isolate` mode.
-- **Fix:** Clear the pinned display and restart Sunshine:
+- **Symptom:** `zerovdd sunshine configure` warns that `sunshine.conf` pins `output_name = ...`, Moonlight connects to a black screen in `isolate` mode, or Sunshine logs `Failed to collect path source data or none was available!` / `Unable to find display or encoder during startup` when physical monitors are powered off or asleep (and `/serverinfo` reports `ServerCodecModeSupport=0`).
+- **Fix:** Ensure `headless_standby = true` is enabled and clear any pinned `output_name`, then restart both `zerovdd-svc` and Sunshine:
 
   ```powershell
   zerovdd sunshine configure --apply --clear-output-name
+  Restart-Service zerovdd-svc
   ```
 
-  If the host has zero physical monitors connected, enable `headless_standby = true`. See [Headless Hosts](/guides/headless-hosts/).
+  `headless_standby = true` is enabled by default in ZeroVDD: `zerovdd-svc` reacts dynamically to DisplayPort/HDMI power-off events (after a 4-second quiet window) to keep a fallback `1920x1080@60` display active whenever zero live physical monitors are present, and automatically departs it within 500 ms once a physical monitor powers back on. See [Headless Hosts](/guides/headless-hosts/).
 
 ### 5. Stale `%ProgramData%\zerovdd\topology-backup.json`
 

@@ -52,6 +52,7 @@ struct FakeDriverState {
     add_calls: Vec<AddDisplayRequest>,
     remove_calls: Vec<RemoveDisplayRequest>,
     update_mode_calls: Vec<UpdateDisplayModeRequest>,
+    set_render_adapter_calls: Vec<SetRenderAdapterRequest>,
     fail_next_add: bool,
     fail_next_add_err: Option<ClientError>,
     fail_get_version: bool,
@@ -70,6 +71,7 @@ impl FakeDriver {
                 add_calls: Vec::new(),
                 remove_calls: Vec::new(),
                 update_mode_calls: Vec::new(),
+                set_render_adapter_calls: Vec::new(),
                 fail_next_add: false,
                 fail_next_add_err: None,
                 fail_get_version: false,
@@ -205,7 +207,12 @@ impl ControlClient for FakeDriver {
         Ok(resp)
     }
 
-    fn set_render_adapter(&self, _request: &SetRenderAdapterRequest) -> Result<(), ClientError> {
+    fn set_render_adapter(&self, request: &SetRenderAdapterRequest) -> Result<(), ClientError> {
+        self.state
+            .lock()
+            .unwrap()
+            .set_render_adapter_calls
+            .push(*request);
         Ok(())
     }
 
@@ -273,6 +280,7 @@ enum LauncherOp {
 struct FakeLauncher {
     session_id: Mutex<Option<u32>>,
     has_active_physical: Mutex<bool>,
+    active_targets_override: Mutex<Option<Vec<(AdapterLuid, u32)>>>,
     ops: Mutex<Vec<LauncherOp>>,
     snapshot_counter: Mutex<u64>,
     restore_notify: Mutex<Option<mpsc::Sender<RestoreCcdReport>>>,
@@ -287,6 +295,7 @@ impl FakeLauncher {
         Self {
             session_id: Mutex::new(session_id),
             has_active_physical: Mutex::new(true),
+            active_targets_override: Mutex::new(None),
             ops: Mutex::new(Vec::new()),
             snapshot_counter: Mutex::new(1),
             restore_notify: Mutex::new(None),
@@ -319,6 +328,12 @@ impl FakeLauncher {
 
     fn set_has_active_physical(&self, has: bool) {
         *self.has_active_physical.lock().unwrap() = has;
+        *self.active_targets_override.lock().unwrap() = None;
+    }
+
+    fn set_active_targets(&self, targets: Vec<(AdapterLuid, u32)>) {
+        *self.has_active_physical.lock().unwrap() = !targets.is_empty();
+        *self.active_targets_override.lock().unwrap() = Some(targets);
     }
 
     fn set_restore_notifier(&self, tx: mpsc::Sender<RestoreCcdReport>) {
@@ -512,7 +527,24 @@ impl ConsoleCcdRunner for FakeLauncher {
         if self.console_session_id().is_none() {
             return Err(LauncherError::ConsoleSessionUnavailable);
         }
+        if let Some(ref targets) = *self.active_targets_override.lock().unwrap() {
+            return Ok(!targets.is_empty());
+        }
         Ok(*self.has_active_physical.lock().unwrap())
+    }
+
+    fn probe_active_display_targets(&self) -> Result<Vec<(AdapterLuid, u32)>, LauncherError> {
+        if self.console_session_id().is_none() {
+            return Err(LauncherError::ConsoleSessionUnavailable);
+        }
+        if let Some(ref targets) = *self.active_targets_override.lock().unwrap() {
+            return Ok(targets.clone());
+        }
+        if *self.has_active_physical.lock().unwrap() {
+            Ok(vec![(AdapterLuid::new(0x1111, 0), 1)])
+        } else {
+            Ok(Vec::new())
+        }
     }
 }
 
@@ -1094,6 +1126,7 @@ fn ipc_dispatch_and_persistent_headless_standby_profiles_work_end_to_end() {
     assert!(IPC_PIPE_SDDL.contains("(A;;GA;;;SY)"));
     assert!(IPC_PIPE_SDDL.contains("(A;;GA;;;BA)"));
     assert!(IPC_PIPE_SDDL.contains("(A;;GRGW;;;IU)"));
+    assert!(IPC_PIPE_SDDL.contains("(A;;GRGW;;;BU)"));
     assert!(!IPC_PIPE_SDDL.contains("WD"));
 
     let exe_dir = TempDir::new().unwrap();
@@ -2286,4 +2319,139 @@ fn unprivileged_ipc_parity_list_gpus_switch_restore_and_layout_add() {
         }
     ));
     assert_eq!(driver.active_count(), 0);
+}
+
+#[test]
+fn dynamic_monitor_pnp_and_lock_reconcile_headless_standby_without_loop() {
+    let dir = TempDir::new().unwrap();
+    let driver = Arc::new(FakeDriver::new());
+    let launcher = Arc::new(FakeLauncher::new(Some(1)));
+    let watcher = Arc::new(FakeProcessWatcher::new());
+    let physical = (AdapterLuid::new(0x1111, 0), 1);
+    launcher.set_active_targets(vec![physical]);
+
+    let config = ConfigV1 {
+        headless_standby: true,
+        ..Default::default()
+    };
+    let coord = ServiceCoordinator::new(
+        config,
+        Some(dir.path().join("topology-backup.json")),
+        Arc::new(StaticDriverProvider::new(Arc::clone(&driver) as _)),
+        Arc::clone(&launcher) as _,
+        Arc::clone(&watcher) as _,
+    );
+
+    coord.initialize_on_startup().unwrap();
+    assert!(!coord.is_headless_standby_active());
+    assert_eq!(driver.active_count(), 0);
+
+    launcher.set_active_targets(Vec::new());
+    coord.on_display_topology_changed();
+    assert!(coord.is_headless_standby_active());
+    assert_eq!(driver.active_count(), 1);
+    let standby_entry = driver.state.lock().unwrap().displays[0].clone();
+    let standby_target = (standby_entry.luid, standby_entry.target_id);
+    assert_eq!(driver.state.lock().unwrap().add_calls.len(), 1);
+    assert!(launcher.ops().iter().any(|op| matches!(
+        op,
+        LauncherOp::Apply(p)
+            if p.target_id == standby_entry.target_id
+                && p.topology_mode == SunshineTopologyMode::Extend
+                && p.snapshot_path.is_none()
+    )));
+
+    // WHY: Windows fires a monitor PnP arrival event for the standby display itself; seeing only
+    // `standby_target` in CCD must be a no-op with zero add/remove flicker.
+    launcher.set_active_targets(vec![standby_target]);
+    coord.on_display_topology_changed();
+    assert!(coord.is_headless_standby_active());
+    assert_eq!(driver.state.lock().unwrap().add_calls.len(), 1);
+    assert_eq!(driver.state.lock().unwrap().remove_calls.len(), 0);
+
+    launcher.set_active_targets(vec![standby_target, physical]);
+    coord.on_display_topology_changed();
+    assert!(!coord.is_headless_standby_active());
+    assert_eq!(driver.active_count(), 0);
+    assert_eq!(driver.state.lock().unwrap().remove_calls.len(), 1);
+
+    launcher.set_active_targets(Vec::new());
+    assert!(!coord
+        .on_session_change(ConsoleSessionEvent::SessionLock)
+        .unwrap());
+    assert!(coord.is_headless_standby_active());
+    assert_eq!(driver.active_count(), 1);
+
+    let disabled_driver = Arc::new(FakeDriver::new());
+    let disabled_launcher = Arc::new(FakeLauncher::new(Some(1)));
+    disabled_launcher.set_active_targets(Vec::new());
+    let disabled_coord = ServiceCoordinator::new(
+        ConfigV1 {
+            headless_standby: false,
+            ..Default::default()
+        },
+        Some(dir.path().join("disabled-backup.json")),
+        Arc::new(StaticDriverProvider::new(Arc::clone(&disabled_driver) as _)),
+        Arc::clone(&disabled_launcher) as _,
+        Arc::clone(&watcher) as _,
+    );
+    disabled_coord.initialize_on_startup().unwrap();
+    disabled_coord.on_display_topology_changed();
+    assert!(!disabled_coord.is_headless_standby_active());
+    assert_eq!(disabled_driver.active_count(), 0);
+}
+
+#[test]
+fn topology_event_heals_dead_standby_without_reapplying_gpu_or_persistent_profiles() {
+    let dir = TempDir::new().unwrap();
+    let driver = Arc::new(FakeDriver::new());
+    let launcher = Arc::new(FakeLauncher::new(Some(1)));
+    let watcher = Arc::new(FakeProcessWatcher::new());
+    let provider = Arc::new(TrackingDriverProvider::new(Arc::clone(&driver) as _));
+    launcher.set_active_targets(Vec::new());
+
+    let config = ConfigV1 {
+        headless_standby: true,
+        gpu: zerovdd_config::GpuSelector::Luid {
+            low: 0x1234,
+            high: 0,
+        },
+        ..Default::default()
+    };
+    let coord = ServiceCoordinator::new(
+        config,
+        Some(dir.path().join("topology-backup.json")),
+        Arc::clone(&provider) as _,
+        Arc::clone(&launcher) as _,
+        Arc::clone(&watcher) as _,
+    );
+
+    coord.initialize_on_startup().unwrap();
+    assert!(coord.is_headless_standby_active());
+    assert_eq!(
+        driver.state.lock().unwrap().set_render_adapter_calls.len(),
+        1
+    );
+    assert_eq!(driver.active_count(), 1);
+
+    // WHY: Simulate a GPU TDR or `WUDFHost` restart wiping driver displays while coordinator still
+    // tracks `standby = Some(...)`; `on_display_topology_changed` must self-heal without re-running
+    // `set_render_adapter`.
+    driver.state.lock().unwrap().displays.clear();
+    launcher.set_active_targets(Vec::new());
+    coord.on_display_topology_changed();
+    assert!(coord.is_headless_standby_active());
+    assert_eq!(driver.active_count(), 1);
+    assert_eq!(
+        driver.state.lock().unwrap().set_render_adapter_calls.len(),
+        1
+    );
+
+    // WHY: Also verify a stale `ControlDevice` error resets the driver provider and retries once.
+    driver.state.lock().unwrap().displays.clear();
+    driver.set_fail_next_add(true);
+    coord.on_display_topology_changed();
+    assert_eq!(provider.resets(), 1);
+    assert!(coord.is_headless_standby_active());
+    assert_eq!(driver.active_count(), 1);
 }

@@ -134,6 +134,16 @@ pub trait ConsoleCcdRunner: Send + Sync {
     /// Captures physical display topology into `snapshot_path` inside the console session.
     fn snapshot(&self, snapshot_path: &Path, force_overwrite: bool) -> Result<(), LauncherError>;
 
+    /// Captures physical display topology into `snapshot_path`, optionally excluding one virtual target.
+    fn snapshot_excluding(
+        &self,
+        snapshot_path: &Path,
+        force_overwrite: bool,
+        _exclude_target: Option<(AdapterLuid, u32)>,
+    ) -> Result<(), LauncherError> {
+        self.snapshot(snapshot_path, force_overwrite)
+    }
+
     /// Applies virtual streaming topology and HDR state inside the console session.
     fn apply(&self, payload: &ApplyCcdPayload) -> Result<Option<DisplayPathRecord>, LauncherError>;
 
@@ -163,6 +173,15 @@ pub trait ConsoleCcdRunner: Send + Sync {
 
     /// Probes whether at least one active display currently exists in the console session.
     fn probe_has_active_displays(&self) -> Result<bool, LauncherError>;
+
+    /// Returns all currently active `(adapter_luid, target_id)` display paths in the console session.
+    fn probe_active_display_targets(&self) -> Result<Vec<(AdapterLuid, u32)>, LauncherError> {
+        if self.probe_has_active_displays()? {
+            Ok(vec![(AdapterLuid::new(0, 0), 0)])
+        } else {
+            Ok(Vec::new())
+        }
+    }
 }
 
 /// Resolves the sibling `zerovdd.exe` path in the same directory as `service_exe`.
@@ -195,7 +214,7 @@ mod win32 {
     use std::process::{Command, Stdio};
     use std::thread;
 
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::NamedTempFile;
     use windows::core::{PCWSTR, PWSTR};
     use windows::Win32::Foundation::{
         CloseHandle, DuplicateHandle, GetLastError, SetHandleInformation, DUPLICATE_SAME_ACCESS,
@@ -218,7 +237,8 @@ mod win32 {
         OpenProcessToken, TerminateProcess, WaitForSingleObject, CREATE_NO_WINDOW,
         CREATE_UNICODE_ENVIRONMENT, PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
     };
-    use zerovdd_client::topology::{load_snapshot, AdapterLuid, DisplayPathRecord};
+    use zerovdd_client::ccd::CcdActivePathProbe;
+    use zerovdd_client::topology::{AdapterLuid, DisplayPathRecord};
 
     use super::{
         resolve_sibling_cli_path, ApplyCcdPayload, ConsoleCcdRunner, LauncherError,
@@ -692,6 +712,15 @@ mod win32 {
             snapshot_path: &Path,
             force_overwrite: bool,
         ) -> Result<(), LauncherError> {
+            self.snapshot_excluding(snapshot_path, force_overwrite, None)
+        }
+
+        fn snapshot_excluding(
+            &self,
+            snapshot_path: &Path,
+            force_overwrite: bool,
+            exclude_target: Option<(AdapterLuid, u32)>,
+        ) -> Result<(), LauncherError> {
             let mut args = vec![
                 "internal-ccd".to_string(),
                 "snapshot".to_string(),
@@ -700,6 +729,14 @@ mod win32 {
             ];
             if force_overwrite {
                 args.push("--force-overwrite".to_string());
+            }
+            if let Some((luid, target_id)) = exclude_target {
+                args.push("--exclude-luid-low".to_string());
+                args.push(luid.low.to_string());
+                args.push("--exclude-luid-high".to_string());
+                args.push(luid.high.to_string());
+                args.push("--exclude-target-id".to_string());
+                args.push(target_id.to_string());
             }
             let _ = self.execute_internal_ccd(&args)?;
             Ok(())
@@ -775,14 +812,25 @@ mod win32 {
             self.restore_with_fallback(snapshot_path, virtual_target, false)
         }
 
+        fn probe_active_display_targets(&self) -> Result<Vec<(AdapterLuid, u32)>, LauncherError> {
+            let args = vec!["internal-ccd".to_string(), "probe".to_string()];
+            let stdout = self.execute_internal_ccd(&args)?;
+            let last_line = stdout
+                .lines()
+                .rev()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or("[]");
+            let probes: Vec<CcdActivePathProbe> = serde_json::from_str(last_line)?;
+            Ok(probes
+                .into_iter()
+                .filter(|p| p.is_live_display)
+                .map(|p| (p.adapter_luid, p.target_id))
+                .collect())
+        }
+
         fn probe_has_active_displays(&self) -> Result<bool, LauncherError> {
-            let dir = TempDir::new()?;
-            let probe_path = dir.path().join("probe.json");
-            self.snapshot(&probe_path, true)?;
-            let Some(snap) = load_snapshot(&probe_path)? else {
-                return Ok(false);
-            };
-            Ok(snap.paths.iter().any(|p| p.active))
+            Ok(!self.probe_active_display_targets()?.is_empty())
         }
 
         fn set_mode(

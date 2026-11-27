@@ -426,6 +426,10 @@ impl Default for LoggingConfig {
     }
 }
 
+const fn default_true() -> bool {
+    true
+}
+
 /// Versioned root configuration for `zerovdd` (`schema_version = 1`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -436,7 +440,7 @@ pub struct ConfigV1 {
     #[serde(default)]
     pub gpu: GpuSelector,
     /// Keep a headless standby virtual display attached when no physical monitors exist.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub headless_standby: bool,
     /// Optional list of service-managed persistent virtual displays.
     #[serde(default)]
@@ -457,7 +461,7 @@ impl Default for ConfigV1 {
         Self {
             schema_version: CURRENT_SCHEMA_VERSION,
             gpu: GpuSelector::default(),
-            headless_standby: false,
+            headless_standby: true,
             persistent_displays: Vec::new(),
             hdr_defaults: HdrDefaults::default(),
             sunshine: SunshineConfig::default(),

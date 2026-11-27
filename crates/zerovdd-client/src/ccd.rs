@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::ClientError;
 use crate::hdr::HdrTargetSetting;
 use crate::topology::{
@@ -242,7 +244,33 @@ pub fn restore_streaming_session_with_fallback<B: DisplayTopologyBackend>(
     }
 
     let current = backend.query_topology()?;
-    let plan = plan_restore_topology(&snapshot, &current, virtual_target)?;
+    let plan = match plan_restore_topology(&snapshot, &current, virtual_target) {
+        Ok(plan) => plan,
+        Err(ClientError::NoActivePhysicalDisplays) if !enable_physical_fallback => {
+            // WHY: If all backed-up physical monitors were powered off or unplugged during the
+            // session, leaving the snapshot on disk blocks headless-standby reconciliation.
+            let skipped: Vec<(AdapterLuid, u32)> = snapshot
+                .paths
+                .iter()
+                .filter(|p| {
+                    p.active
+                        && !virtual_target
+                            .is_some_and(|(vl, vt)| p.adapter_luid == vl && p.target_id == vt)
+                })
+                .map(|p| (p.adapter_luid, p.target_id))
+                .collect();
+            let _ = remove_snapshot(snapshot_path)?;
+            return Ok(RestoredTopologyReport {
+                snapshot_found: true,
+                restored_path_count: 0,
+                skipped_unplugged_targets: skipped,
+            });
+        }
+        Err(ClientError::NoActivePhysicalDisplays) => {
+            plan_enable_attached_physical(&current, virtual_target)?
+        }
+        Err(err) => return Err(err),
+    };
     let restored_path_count = plan.desired_paths.iter().filter(|p| p.active).count();
 
     backend.apply_topology(&plan.desired_paths)?;
@@ -357,6 +385,74 @@ pub fn apply_display_mode_in_place<B: DisplayTopologyBackend>(
     )
 }
 
+/// Bitmask combining `DISPLAYCONFIG_TARGET_FORCED_AVAILABILITY_BOOT | PATH | SYSTEM`.
+pub const DISPLAYCONFIG_TARGET_FORCED_AVAILABILITY_MASK: u32 =
+    0x0000_0004 | 0x0000_0008 | 0x0000_0010;
+
+/// Returns `true` when `target_status_flags` marks an OS-forced/simulated display target.
+pub const fn is_forced_availability_target(target_status_flags: u32) -> bool {
+    (target_status_flags & DISPLAYCONFIG_TARGET_FORCED_AVAILABILITY_MASK) != 0
+}
+
+/// Returns `true` when a CCD path represents a live, non-simulated active display.
+pub fn is_live_ccd_display(
+    active: bool,
+    target_available: bool,
+    target_status_flags: u32,
+    monitor_device_path: &str,
+    in_qdc_only_active: bool,
+) -> bool {
+    active
+        && target_available
+        && in_qdc_only_active
+        && !is_forced_availability_target(target_status_flags)
+        && !monitor_device_path.is_empty()
+}
+
+/// Diagnostic snapshot of a CCD path reported as `DISPLAYCONFIG_PATH_ACTIVE`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CcdActivePathProbe {
+    /// Adapter LUID owning the display target.
+    pub adapter_luid: AdapterLuid,
+    /// VidPN target identifier.
+    pub target_id: u32,
+    /// Raw `DISPLAYCONFIG_PATH_INFO.flags`.
+    pub path_flags: u32,
+    /// Raw `DISPLAYCONFIG_PATH_TARGET_INFO.targetAvailable`.
+    pub target_available: bool,
+    /// Raw `DISPLAYCONFIG_PATH_TARGET_INFO.statusFlags`.
+    pub target_status_flags: u32,
+    /// Raw `DISPLAYCONFIG_VIDEO_OUTPUT_TECHNOLOGY` discriminant.
+    pub output_technology: i32,
+    /// Raw `DISPLAYCONFIG_TARGET_DEVICE_NAME.flags` bitfield value.
+    pub name_flags: u32,
+    /// Friendly monitor name reported by `DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME`.
+    pub monitor_friendly_name: String,
+    /// PnP monitor device interface path (`\\?\DISPLAY#...`), empty for simulated/ghost paths.
+    pub monitor_device_path: String,
+    /// Whether this target was also returned by `QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS)`.
+    pub in_qdc_only_active: bool,
+    /// Whether `target_status_flags` has any `DISPLAYCONFIG_TARGET_FORCED_AVAILABILITY_*` bit set.
+    pub forced_availability: bool,
+    /// Whether this path qualifies as a real, live active display for standby/topology decisions.
+    pub is_live_display: bool,
+}
+
+/// Queries diagnostic metadata for every active CCD path in the current Windows session.
+#[cfg(windows)]
+pub fn query_active_path_probes() -> Result<Vec<CcdActivePathProbe>, ClientError> {
+    win32::query_active_path_probes_win32()
+}
+
+/// Queries diagnostic metadata for every active CCD path in the current Windows session.
+#[cfg(not(windows))]
+pub fn query_active_path_probes() -> Result<Vec<CcdActivePathProbe>, ClientError> {
+    Err(ClientError::Ccd {
+        operation: "QueryDisplayConfig",
+        status: 1,
+    })
+}
+
 #[cfg(any(windows, test))]
 const WIN32_ERROR_ACCESS_DENIED: i32 = 5;
 
@@ -390,8 +486,9 @@ mod win32 {
         DISPLAYCONFIG_SCANLINE_ORDERING_INTERLACED_LOWERFIELDFIRST,
         DISPLAYCONFIG_SCANLINE_ORDERING_PROGRESSIVE, DISPLAYCONFIG_SCANLINE_ORDERING_UNSPECIFIED,
         DISPLAYCONFIG_SOURCE_DEVICE_NAME, DISPLAYCONFIG_SOURCE_MODE,
-        DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ALL_PATHS, SDC_ALLOW_CHANGES, SDC_APPLY,
-        SDC_SAVE_TO_DATABASE, SDC_USE_SUPPLIED_DISPLAY_CONFIG,
+        DISPLAYCONFIG_TARGET_DEVICE_NAME, QDC_ALL_PATHS, QDC_ONLY_ACTIVE_PATHS,
+        QUERY_DISPLAY_CONFIG_FLAGS, SDC_ALLOW_CHANGES, SDC_APPLY, SDC_SAVE_TO_DATABASE,
+        SDC_USE_SUPPLIED_DISPLAY_CONFIG,
     };
     use windows::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, ERROR_SUCCESS, LUID, POINTL};
     use windows::Win32::Graphics::Gdi::{
@@ -456,7 +553,10 @@ mod win32 {
         retried.unwrap_or(Err(first_err))
     }
 
-    use super::DisplayTopologyBackend;
+    use super::{
+        is_forced_availability_target, is_live_ccd_display, CcdActivePathProbe,
+        DisplayTopologyBackend,
+    };
     use crate::error::ClientError;
     use crate::hdr::{
         apply_hdr_setting, query_display_color_state, query_os_version, HdrTargetSetting,
@@ -580,7 +680,14 @@ mod win32 {
         }
     }
 
-    fn query_target_friendly_name(adapter_id: LUID, target_id: u32) -> String {
+    struct TargetDeviceInfo {
+        ok: bool,
+        friendly_name: String,
+        device_path: String,
+        name_flags: u32,
+    }
+
+    fn query_target_device_info(adapter_id: LUID, target_id: u32) -> TargetDeviceInfo {
         let mut pkt = DISPLAYCONFIG_TARGET_DEVICE_NAME {
             header: DISPLAYCONFIG_DEVICE_INFO_HEADER {
                 r#type: DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME,
@@ -593,13 +700,26 @@ mod win32 {
         // SAFETY: `pkt` is stack-allocated and initialized with exact `header.size`.
         let status = unsafe { DisplayConfigGetDeviceInfo(&mut pkt.header) };
         if status as u32 == ERROR_SUCCESS.0 {
-            utf16_nul_to_string(&pkt.monitorFriendlyDeviceName)
+            // SAFETY: `value` is a `u32` view of the `DISPLAYCONFIG_TARGET_DEVICE_NAME_FLAGS_0` union.
+            let name_flags = unsafe { pkt.flags.Anonymous.value };
+            TargetDeviceInfo {
+                ok: true,
+                friendly_name: utf16_nul_to_string(&pkt.monitorFriendlyDeviceName),
+                device_path: utf16_nul_to_string(&pkt.monitorDevicePath),
+                name_flags,
+            }
         } else {
-            String::new()
+            TargetDeviceInfo {
+                ok: false,
+                friendly_name: String::new(),
+                device_path: String::new(),
+                name_flags: 0,
+            }
         }
     }
 
-    fn query_all_paths_and_modes(
+    fn query_paths_and_modes_with_flags(
+        flags: QUERY_DISPLAY_CONFIG_FLAGS,
     ) -> Result<(Vec<DISPLAYCONFIG_PATH_INFO>, Vec<DISPLAYCONFIG_MODE_INFO>), ClientError> {
         // WHY: Topology changes can resize buffer counts between GetDisplayConfigBufferSizes
         // and QueryDisplayConfig, so Windows explicitly recommends retrying on ERROR_INSUFFICIENT_BUFFER.
@@ -607,9 +727,8 @@ mod win32 {
             let mut path_count: u32 = 0;
             let mut mode_count: u32 = 0;
             // SAFETY: Output pointers refer to initialized stack locals.
-            let size_err = unsafe {
-                GetDisplayConfigBufferSizes(QDC_ALL_PATHS, &mut path_count, &mut mode_count)
-            };
+            let size_err =
+                unsafe { GetDisplayConfigBufferSizes(flags, &mut path_count, &mut mode_count) };
             if size_err != ERROR_SUCCESS {
                 return Err(ClientError::Ccd {
                     operation: "GetDisplayConfigBufferSizes",
@@ -622,7 +741,7 @@ mod win32 {
             // SAFETY: `paths` and `modes` match `path_count` and `mode_count` capacity.
             let query_err = unsafe {
                 QueryDisplayConfig(
-                    QDC_ALL_PATHS,
+                    flags,
                     &mut path_count,
                     paths.as_mut_ptr(),
                     &mut mode_count,
@@ -649,14 +768,94 @@ mod win32 {
         })
     }
 
+    struct RawCcdSnapshot {
+        all_paths: Vec<DISPLAYCONFIG_PATH_INFO>,
+        all_modes: Vec<DISPLAYCONFIG_MODE_INFO>,
+        only_active_targets: BTreeSet<(AdapterLuid, u32)>,
+    }
+
+    fn query_all_and_only_active_paths() -> Result<RawCcdSnapshot, ClientError> {
+        let (all_paths, all_modes) = query_paths_and_modes_with_flags(QDC_ALL_PATHS)?;
+        let (active_paths, _) = query_paths_and_modes_with_flags(QDC_ONLY_ACTIVE_PATHS)?;
+        let only_active_targets = active_paths
+            .iter()
+            .filter(|p| {
+                (p.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0
+                    && !is_forced_availability_target(p.targetInfo.statusFlags)
+            })
+            .map(|p| (to_adapter_luid(p.targetInfo.adapterId), p.targetInfo.id))
+            .collect();
+        Ok(RawCcdSnapshot {
+            all_paths,
+            all_modes,
+            only_active_targets,
+        })
+    }
+
+    pub(super) fn query_active_path_probes_win32() -> Result<Vec<CcdActivePathProbe>, ClientError> {
+        let RawCcdSnapshot {
+            all_paths: raw_paths,
+            only_active_targets,
+            ..
+        } = run_on_input_desktop_if_access_denied(query_all_and_only_active_paths)?;
+        let mut seen = BTreeSet::new();
+        let mut probes = Vec::new();
+        for path in &raw_paths {
+            let raw_active = (path.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0;
+            if !raw_active {
+                continue;
+            }
+            let luid = to_adapter_luid(path.targetInfo.adapterId);
+            let target_id = path.targetInfo.id;
+            if !seen.insert((luid, target_id)) {
+                continue;
+            }
+            let target_available = path.targetInfo.targetAvailable.as_bool();
+            let target_status_flags = path.targetInfo.statusFlags;
+            let info = query_target_device_info(path.targetInfo.adapterId, target_id);
+            let in_qdc_only_active = only_active_targets.contains(&(luid, target_id));
+            let forced_availability = is_forced_availability_target(target_status_flags);
+            let is_live_display = is_live_ccd_display(
+                raw_active,
+                target_available,
+                target_status_flags,
+                &info.device_path,
+                in_qdc_only_active,
+            );
+            probes.push(CcdActivePathProbe {
+                adapter_luid: luid,
+                target_id,
+                path_flags: path.flags,
+                target_available,
+                target_status_flags,
+                output_technology: path.targetInfo.outputTechnology.0,
+                name_flags: info.name_flags,
+                monitor_friendly_name: info.friendly_name,
+                monitor_device_path: info.device_path,
+                in_qdc_only_active,
+                forced_availability,
+                is_live_display,
+            });
+        }
+        Ok(probes)
+    }
+
     impl DisplayTopologyBackend for WindowsCcdBackend {
         fn query_topology(&self) -> Result<CcdTopologyState, ClientError> {
             let os_build = query_os_version()?.build;
-            let (raw_paths, raw_modes) = query_all_paths_and_modes()?;
+            let RawCcdSnapshot {
+                all_paths: raw_paths,
+                all_modes: raw_modes,
+                only_active_targets,
+            } = run_on_input_desktop_if_access_denied(query_all_and_only_active_paths)?;
 
             let mut active_sources_by_luid: BTreeMap<AdapterLuid, BTreeSet<u32>> = BTreeMap::new();
             for path in &raw_paths {
-                if (path.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0 {
+                let target_luid = to_adapter_luid(path.targetInfo.adapterId);
+                let is_live_active = (path.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0
+                    && !is_forced_availability_target(path.targetInfo.statusFlags)
+                    && only_active_targets.contains(&(target_luid, path.targetInfo.id));
+                if is_live_active {
                     active_sources_by_luid
                         .entry(to_adapter_luid(path.sourceInfo.adapterId))
                         .or_default()
@@ -692,8 +891,25 @@ mod win32 {
 
             let mut records = Vec::with_capacity(best_paths.len());
             for ((luid, target_id), (_, path)) in best_paths {
-                let active = (path.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0;
-                let target_available = path.targetInfo.targetAvailable.as_bool();
+                let raw_active = (path.flags & DISPLAYCONFIG_PATH_ACTIVE) != 0;
+                let raw_target_available = path.targetInfo.targetAvailable.as_bool();
+                let target_info = query_target_device_info(path.targetInfo.adapterId, target_id);
+                let forced_availability =
+                    is_forced_availability_target(path.targetInfo.statusFlags);
+                let in_qdc_only_active = only_active_targets.contains(&(luid, target_id));
+                // WHY: Windows CCD can retain OS-forced/simulated paths with `DISPLAYCONFIG_PATH_ACTIVE`
+                // and `targetAvailable=TRUE` after the last real monitor departs; filter those out so
+                // headless standby and topology snapshots never mistake simulated paths for live monitors.
+                let active = is_live_ccd_display(
+                    raw_active,
+                    raw_target_available,
+                    path.targetInfo.statusFlags,
+                    &target_info.device_path,
+                    in_qdc_only_active,
+                );
+                let target_available = raw_target_available
+                    && !forced_availability
+                    && (!target_info.ok || !target_info.device_path.is_empty());
 
                 // SAFETY: `modeInfoIdx` is a `u32` alternative in the `DISPLAYCONFIG_PATH_SOURCE_INFO_0` union.
                 let source_mode_idx = unsafe { path.sourceInfo.Anonymous.modeInfoIdx };
@@ -735,8 +951,7 @@ mod win32 {
                 }
 
                 let gdi_name = query_source_gdi_name(path.sourceInfo.adapterId, path.sourceInfo.id);
-                let monitor_friendly_name =
-                    query_target_friendly_name(path.targetInfo.adapterId, target_id);
+                let monitor_friendly_name = target_info.friendly_name;
                 let hdr_state = if active && target_available {
                     query_display_color_state(luid, target_id, os_build).ok()
                 } else {

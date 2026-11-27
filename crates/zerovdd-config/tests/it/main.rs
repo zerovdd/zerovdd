@@ -15,7 +15,7 @@ fn default_config_is_valid_and_roundtrips_toml() {
     let cfg = ConfigV1::default();
     assert_eq!(cfg.schema_version, CURRENT_SCHEMA_VERSION);
     assert_eq!(cfg.gpu, GpuSelector::AutoBest);
-    assert!(!cfg.headless_standby);
+    assert!(cfg.headless_standby);
     assert!(cfg.persistent_displays.is_empty());
     assert_eq!(cfg.sunshine.topology_mode, SunshineTopologyMode::Isolate);
     cfg.validate().unwrap();
@@ -23,6 +23,10 @@ fn default_config_is_valid_and_roundtrips_toml() {
     let toml_text = cfg.to_toml_string().unwrap();
     let parsed = ConfigV1::from_toml_str(&toml_text).unwrap();
     assert_eq!(parsed, cfg);
+
+    let explicit_false = ConfigV1::from_toml_str("schema_version = 1\nheadless_standby = false\n")
+        .expect("explicit headless_standby=false parses");
+    assert!(!explicit_false.headless_standby);
 }
 
 #[test]
@@ -159,6 +163,7 @@ enabled = true
 level = "debug"
 "#;
     let parsed = ConfigV1::from_toml_str(partial_toml).unwrap();
+    assert!(parsed.headless_standby);
     assert_eq!(parsed.sunshine.topology_mode, SunshineTopologyMode::Extend);
     assert_eq!(parsed.sunshine.default_width, 1920);
     assert_eq!(parsed.sunshine.default_height, 1080);

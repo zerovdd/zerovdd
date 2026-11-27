@@ -29,7 +29,7 @@ use crate::console_launcher::{
 use crate::persistent::{
     apply_configured_gpu_preference, depart_headless_standby, hdr_metadata_from_defaults,
     hdr_metadata_with_overrides, load_and_validate_edid_file, millihz_to_rational,
-    reconcile_headless_standby, reconcile_persistent_displays, PersistentError,
+    reconcile_headless_standby, reconcile_persistent_displays, PersistentError, StandbyDisplay,
 };
 use crate::pipe::IpcHandler;
 
@@ -130,6 +130,8 @@ pub enum ConsoleSessionEvent {
     SessionLogon,
     /// Interactive session unlocked (`WTS_SESSION_UNLOCK`).
     SessionUnlock,
+    /// Interactive session locked (`WTS_SESSION_LOCK`).
+    SessionLock,
     /// Any other session notification not requiring recovery action.
     Other,
 }
@@ -140,6 +142,14 @@ impl ConsoleSessionEvent {
         matches!(
             self,
             Self::ConsoleConnect | Self::SessionLogon | Self::SessionUnlock
+        )
+    }
+
+    /// Returns `true` when this event should reconcile headless-standby display state.
+    pub const fn should_reconcile_standby(self) -> bool {
+        matches!(
+            self,
+            Self::ConsoleConnect | Self::SessionLogon | Self::SessionUnlock | Self::SessionLock
         )
     }
 }
@@ -452,7 +462,7 @@ impl ActiveSession {
 struct CoordinatorState {
     active_session: Option<ActiveSession>,
     pending_startup_restore: bool,
-    standby_guid: Option<[u8; 16]>,
+    standby: Option<StandbyDisplay>,
     persistent_guids: Vec<[u8; 16]>,
     next_generation: u64,
 }
@@ -557,7 +567,7 @@ impl ServiceCoordinator {
             state: Mutex::new(CoordinatorState {
                 active_session: None,
                 pending_startup_restore: false,
-                standby_guid: None,
+                standby: None,
                 persistent_guids: Vec::new(),
                 next_generation: 1,
             }),
@@ -577,7 +587,7 @@ impl ServiceCoordinator {
         self.state
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .standby_guid
+            .standby
             .is_some()
     }
 
@@ -607,6 +617,9 @@ impl ServiceCoordinator {
     /// startup topology restore once a console session becomes available.
     pub fn on_session_change(&self, event: ConsoleSessionEvent) -> Result<bool, SessionError> {
         if !event.should_trigger_pending_restore() {
+            if event.should_reconcile_standby() {
+                self.on_display_topology_changed();
+            }
             return Ok(false);
         }
 
@@ -640,6 +653,16 @@ impl ServiceCoordinator {
         Ok(restored)
     }
 
+    /// Reconciles headless-standby display state after a monitor PnP or power event without
+    /// re-running GPU adapter switches or persistent display creation.
+    pub fn on_display_topology_changed(&self) {
+        let _op = self
+            .op_mutex
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.reconcile_headless_standby_under_op_lock();
+    }
+
     /// Starts or replaces a Sunshine streaming virtual display session.
     pub fn start_session(&self, req: &StartSessionRequest) -> Result<SessionStatus, SessionError> {
         req.validate()?;
@@ -670,23 +693,29 @@ impl ServiceCoordinator {
                 &RemoveDisplayRequest::by_guid(prev.monitor_guid),
             );
         } else {
-            let mut standby_guid = self
+            let mut standby = self
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .standby_guid;
-            if standby_guid.is_some() {
-                let _ = depart_headless_standby(driver.as_ref(), &mut standby_guid);
-                self.state
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .standby_guid = standby_guid;
-            }
+                .standby;
+            let standby_target = standby.and_then(|s| s.target);
             if !backup_existed_before {
-                if let Err(err) = self.launcher.snapshot(&self.snapshot_path, false) {
+                // WHY: Snapshot physical topology while excluding `standby_target` BEFORE departing
+                // standby so async IddCx monitor departure cannot leak standby into `topology-backup.json`.
+                if let Err(err) =
+                    self.launcher
+                        .snapshot_excluding(&self.snapshot_path, false, standby_target)
+                {
                     self.reconcile_profiles_under_op_lock();
                     return Err(err.into());
                 }
+            }
+            if standby.is_some() {
+                let _ = depart_headless_standby(driver.as_ref(), &mut standby);
+                self.state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .standby = standby;
             }
         }
 
@@ -1126,8 +1155,8 @@ impl ServiceCoordinator {
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if guard.standby_guid == Some(matched) {
-                    guard.standby_guid = None;
+                if guard.standby.is_some_and(|s| s.guid == matched) {
+                    guard.standby = None;
                 }
                 Ok(true)
             }
@@ -1136,8 +1165,8 @@ impl ServiceCoordinator {
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if guard.standby_guid == Some(matched) {
-                    guard.standby_guid = None;
+                if guard.standby.is_some_and(|s| s.guid == matched) {
+                    guard.standby = None;
                 }
                 Ok(false)
             }
@@ -1519,7 +1548,7 @@ impl ServiceCoordinator {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            guard.standby_guid = None;
+            guard.standby = None;
             guard.persistent_guids.clear();
             guard.pending_startup_restore = false;
         }
@@ -1563,7 +1592,7 @@ impl ServiceCoordinator {
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .standby_guid
+                .standby
                 .take();
             let _ = depart_headless_standby(driver.as_ref(), &mut standby);
 
@@ -1606,23 +1635,51 @@ impl ServiceCoordinator {
                 .persistent_guids = guids;
         }
 
-        let mut standby = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .standby_guid;
-        if reconcile_headless_standby(
-            driver.as_ref(),
-            self.launcher.as_ref(),
-            &self.config,
-            &mut standby,
-        )
-        .is_ok()
-        {
-            self.state
+        self.reconcile_headless_standby_under_op_lock();
+    }
+
+    fn reconcile_headless_standby_under_op_lock(&self) {
+        let has_active_or_pending = {
+            let guard = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.active_session.is_some() || guard.pending_startup_restore
+        };
+        if has_active_or_pending {
+            return;
+        }
+
+        for attempt in 0..2 {
+            let Ok(driver) = self.driver.get_or_connect() else {
+                return;
+            };
+            let mut standby = self
+                .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .standby_guid = standby;
+                .standby;
+            match reconcile_headless_standby(
+                driver.as_ref(),
+                self.launcher.as_ref(),
+                &self.config,
+                &mut standby,
+            ) {
+                Ok(_) => {
+                    self.state
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .standby = standby;
+                    return;
+                }
+                Err(PersistentError::Client(ref err)) if attempt == 0 => {
+                    // WHY: Recover automatically if `WUDFHost` restarted and invalidated the cached handle.
+                    if !self.reset_driver_if_stale(driver.as_ref(), err) {
+                        return;
+                    }
+                }
+                Err(_) => return,
+            }
         }
     }
 
@@ -1666,17 +1723,19 @@ impl ServiceCoordinator {
         }
     }
 
-    fn reset_driver_if_stale(&self, driver: &dyn ControlClient, err: &ClientError) {
+    fn reset_driver_if_stale(&self, driver: &dyn ControlClient, err: &ClientError) -> bool {
         match err {
             ClientError::DeviceNotFound(_) | ClientError::AccessDenied | ClientError::Io(_) => {
                 self.driver.reset();
+                true
             }
             // WHY: Domain IOCTL rejections arrive as ClientError::Win32; resetting a live
             // Control Device handle fires EvtFileCleanup and departs all HandleBound displays.
             ClientError::Win32 { .. } if driver.get_version().is_err() => {
                 self.driver.reset();
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 

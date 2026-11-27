@@ -41,11 +41,12 @@ Protocol version `1.1.0` sets feature bit `PROTOCOL_FLAG_COLOR_AND_PPI = 1 << 3`
 
 ## Session-0 Service Named Pipe (`\\.\pipe\zerovdd-svc`)
 
-- **Strict DACL (SDDL):** `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)`
+- **Strict DACL (SDDL):** `D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)(A;;GRGW;;;BU)` with `PIPE_REJECT_REMOTE_CLIENTS` enabled on `CreateNamedPipeW`:
   - `SY` (`LocalSystem`): Generic All
   - `BA` (`Builtin Administrators`): Generic All
   - `IU` (`Interactive Logged-On Users`): Generic Read + Generic Write
-  - Never grants access to `Everyone` (`WD`) or `NETWORK`.
+  - `BU` (`Builtin Users`): Generic Read + Generic Write (allows non-elevated local shells, SSH/remote automation shells, and `elevated: false` Sunshine prep commands while `PIPE_REJECT_REMOTE_CLIENTS` blocks SMB network clients)
+  - Never grants access to `Everyone` (`WD`), `ANONYMOUS`, or `NETWORK`.
 - **Wire Framing:** Length-prefixed (`u32` little-endian byte count, bounded) UTF-8 JSON `IpcEnvelope<T> { version: 1, request_id, payload }`.
 - **Supported `IpcRequest` Variants:**
   - `StartSession`, `StopSession`, `GetSessionStatus`

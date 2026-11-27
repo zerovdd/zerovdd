@@ -7,14 +7,26 @@ import { Steps } from '@astrojs/starlight/components';
 
 On a Windows 11 streaming server with **no physical monitor attached** (or a DisplayPort/HDMI monitor powered completely off), Sunshine's startup encoder probe (`video::probe_encoders()`) and DXGI Desktop Duplication can fail if zero active displays exist when Windows boots.
 
-## Enable `headless_standby`
+## Enabled Out of the Box (`headless_standby = true`)
+
+`headless_standby` is **enabled by default** in ZeroVDD (`ConfigV1::default()`), so both completely headless servers and desktop PCs with DisplayPort monitors that power off while idle work with **zero configuration**.
+
+Confirm the standby monitor is active (when no physical monitor is powered on):
+
+```powershell
+zerovdd display list
+```
+
+### Opting Out (Strict Zero Standby)
+
+If you never want a fallback display attached when all physical monitors power off, set `headless_standby = false` in `%ProgramData%\zerovdd\config.toml` (or run `zerovdd sunshine configure --apply --no-headless-standby`) and restart `zerovdd-svc`:
 
 <Steps>
-1. Edit `%ProgramData%\zerovdd\config.toml` and set `headless_standby = true`:
+1. Edit `%ProgramData%\zerovdd\config.toml`:
 
    ```toml title="config.toml"
    schema_version = 1
-   headless_standby = true
+   headless_standby = false
    ```
 
 2. Restart `zerovdd-svc` from an elevated PowerShell prompt:
@@ -22,20 +34,15 @@ On a Windows 11 streaming server with **no physical monitor attached** (or a Dis
    ```powershell
    Restart-Service zerovdd-svc
    ```
-
-3. Confirm the standby monitor is active:
-
-   ```powershell
-   zerovdd display list
-   ```
 </Steps>
 
 ## How Headless Standby Works
 
-1. When `zerovdd-svc` starts and queries the active console display topology, if zero displays are active, it automatically attaches a `1920x1080@60` standby virtual monitor named `zerovdd-headless-standby`.
-2. Sunshine initializes its GPU hardware encoders cleanly against the standby display.
-3. When a Moonlight client connects, `zerovdd-svc` transitions directly to the client's exact resolution, refresh rate, and HDR profile (preserving any physical monitors if one was later plugged in).
-4. When the stream ends, if no physical monitor is connected, `zerovdd-svc` re-attaches `zerovdd-headless-standby` instead of leaving Windows with zero displays.
+1. `zerovdd-svc` monitors Windows monitor Plug-and-Play events (`GUID_DEVINTERFACE_MONITOR`), power resume events (ignoring `Suspend`), and console session transitions (including lock/unlock).
+2. Whenever zero live physical displays remain active (filtering out OS-forced/simulated CCD ghost paths) for a 4-second quiet window (so brief DisplayPort link re-training, HDR toggles, or fullscreen mode switches never cause false flicker), `zerovdd-svc` automatically attaches and activates a `1920x1080@60` SDR standby virtual monitor named `zerovdd-headless-standby`.
+3. Sunshine keeps a live display and hardware GPU encoder ready so Moonlight launches never hit the 0-display encoder re-enumeration deadlock (`MaxLumaPixelsHEVC=0` / `Unable to find display or encoder during startup`).
+4. When a Moonlight client connects, `zerovdd-svc` transitions cleanly to the client's exact resolution, refresh rate, and HDR profile without capturing the standby monitor in `topology-backup.json`.
+5. When a real physical monitor powers back on or reconnects, `zerovdd-svc` detects the arrival automatically and departs `zerovdd-headless-standby` within 500 ms so you never get stuck with a phantom second monitor.
 
 :::tip[No HDMI Dummy Plug Required]
 With `headless_standby = true`, you do not need a physical HDMI/DisplayPort dummy plug, and unlike a dummy plug you never get stuck with a fixed dummy resolution or phantom second monitor when a real display is plugged in.

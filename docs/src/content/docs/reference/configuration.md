@@ -9,7 +9,7 @@ description: Complete schema, defaults, validation rules, and annotated example 
 
 ```toml title="C:\ProgramData\zerovdd\config.toml"
 schema_version = 1
-headless_standby = false
+headless_standby = true
 
 [gpu]
 mode = "auto_best"
@@ -70,7 +70,7 @@ etw_enabled = true
 | Key | Type | Default | Constraints / Purpose |
 | :--- | :--- | :--- | :--- |
 | `schema_version` | `u32` | `1` | Must equal `1`. Any other value is rejected. |
-| `headless_standby` | `bool` | `false` | When `true`, attaches a `1920x1080@60` standby display if zero active displays exist at service startup or post-stream restore. |
+| `headless_standby` | `bool` | `true` | When `true` (default), dynamically attaches a `1920x1080@60` standby display whenever zero live physical monitors are active (boot, DisplayPort sleep/power-off after a 4 s quiet window, or post-stream restore) and automatically departs it within 500 ms once any physical monitor wakes up. Set `false` to disable standby completely. |
 
 ## `[gpu]`
 
